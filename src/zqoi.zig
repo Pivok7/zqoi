@@ -11,14 +11,6 @@ pub const Rgba = struct {
 pub const Colorspace = enum(u8) {
     srgb = 0,
     linear = 1,
-
-    pub fn toInt(self: @This()) u8 {
-        return @intFromEnum(self);
-    }
-
-    pub fn fromInt(val: u8) @This() {
-        return @enumFromInt(val);
-    }
 };
 
 pub const ImageFormat = enum {
@@ -26,6 +18,20 @@ pub const ImageFormat = enum {
     r8g8b8a8_linear,
     r8g8b8_srgb,
     r8g8b8a8_srgb,
+
+    pub fn toChannels(self: *const @This()) u8 {
+        switch (self.*) {
+            .r8g8b8_linear, .r8g8b8_srgb => return 3,
+            .r8g8b8a8_linear, .r8g8b8a8_srgb => return 4,
+        }
+    }
+
+    pub fn toColorspace(self: *const @This()) Colorspace {
+        switch (self.*) {
+            .r8g8b8_srgb, .r8g8b8a8_srgb => return .srgb,
+            .r8g8b8_linear, .r8g8b8a8_linear => return .linear,
+        }
+    }
 };
 
 pub const Image = struct {
@@ -38,49 +44,62 @@ pub const Image = struct {
     pub fn fromMemory(
         allocator: Allocator,
         data: []u8,
-        width: u32,
-        height: u32,
-        format: ImageFormat,
     ) @This() {
         return .{
             .allocator = allocator,
-            .width = width,
-            .height = height,
             //TODO: Encoding
             .pixels = @as([]Rgba, @alignCast(data)),
-            .format = format,
         };
     }
 
-    pub fn writeToFilePath(self: *@This()) !void {
-        _ = self;
+    pub fn writeToFilePath(self: *const @This(), file_path: []const u8) !void {
+        const header = FileHeader{
+            .width = self.width,
+            .height = self.height,
+            .channels = self.format.toChannels(),
+            .colorspace = self.format.toColorspace(),
+        };
+
+        var encoded_data = std.ArrayList(u8).init(self.allocator);
+        defer encoded_data.deinit();
+
+        try encodeData(encoded_data.writer(), self.pixels);
+
+        const stream_end = [_]u8{
+            0, 0, 0, 0, 0, 0, 0, 1
+        };
+
+        const file = try std.fs.cwd().createFile(file_path, .{});
+        defer file.close();
+
+        try encodeHeader(file.writer(), &header);
+        _ = try file.writeAll(encoded_data.items);
+        _ = try file.writeAll(&stream_end);
     }
 };
 
 pub const FileHeader = struct {
-    magic: [4]u8 = .{ 'q', 'o', 'i', 'f' },
+    magic: []const u8 = "qoif",
     width: u32,
     height: u32,
     channels: u8 = 4,
     colorspace: Colorspace = .srgb,
 };
 
-fn encodeHeader(file_stream_header: []u8, header: *const FileHeader) !void {
-    @memcpy(file_stream_header[0..4], "qoif");
-    std.mem.writeInt(u32, file_stream_header[4..8], header.width, .big);
-    std.mem.writeInt(u32, file_stream_header[8..12], header.height, .big);
-    file_stream_header[12] = header.channels;
-    file_stream_header[13] = Colorspace.toInt(header.colorspace);
-    return;
+fn encodeHeader(writer: anytype, header: *const FileHeader) !void {
+    try writer.writeAll(header.magic);
+    try writer.writeInt(u32, header.width, .big);
+    try writer.writeInt(u32, header.height, .big);
+    try writer.writeByte(header.channels);
+    try writer.writeByte(@intFromEnum(header.colorspace));
 }
 
-fn comparePixels(pixel_1: Rgba, pixel_2: Rgba) bool {
-
+fn pixelCmp(pixel_1: Rgba, pixel_2: Rgba) bool {
     if (pixel_1.r != pixel_2.r 
-      or pixel_1.g != pixel_2.g 
-       or pixel_1.b != pixel_2.b 
+        or pixel_1.g != pixel_2.g 
+        or pixel_1.b != pixel_2.b 
         or pixel_1.a != pixel_2.a) {
-         return false;
+        return false;
     }
     return true;
 }
@@ -99,7 +118,7 @@ fn checkDiff(diff: Rgba) bool {
     return true;
 }
 
-fn getcolor_diff(pixel_1: Rgba, pixel_2: Rgba) Rgba {
+fn colorDiff(pixel_1: Rgba, pixel_2: Rgba) Rgba {
     const diff = Rgba{
         .r = pixel_2.r -% pixel_1.r,
         .g = pixel_2.g -% pixel_1.g,
@@ -110,11 +129,9 @@ fn getcolor_diff(pixel_1: Rgba, pixel_2: Rgba) Rgba {
     return diff;
 }
 
-fn encodeData(file_stream_data: *std.ArrayList(u8), raw_data: []Rgba) !void {
+fn encodeData(writer: anytype, raw_data: []Rgba) !void {
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{.r = 0, .g = 0, .b = 0, .a = 0});
-
-    var just_issued_lookup_index: bool = false;
 
     var previous_pixel = Rgba{
         .r = 0, 
@@ -123,133 +140,150 @@ fn encodeData(file_stream_data: *std.ArrayList(u8), raw_data: []Rgba) !void {
         .a = 255
     };
 
-    var current_run: u6 = 0;
+    var current_run: u8 = 0;
+    var just_issued_lookup: bool = false;
     
     for (raw_data) |current_pixel| {
-        
+
         // QOI_OP_RUN
-        if (comparePixels(current_pixel, previous_pixel)) {
+        if (pixelCmp(current_pixel, previous_pixel)) {
             current_run += 1;
-            if (current_run == 1) {
-                try file_stream_data.append(0b11000000);
-            }
-            else {
-                file_stream_data.items[file_stream_data.items.len - 1] += 1;
-            }
 
             if (current_run >= 62) {
+                try writer.writeByte(0b11000000 + 61);
                 current_run = 0;
             }
+
+            continue;
         }
-        else {
+
+        if (current_run > 0) {
+            try writer.writeByte(0b11000000 + current_run - 1);
             current_run = 0;
+        }
+        
+        // QOI_OP_INDEX
+        const lookup_index: u8 = @intCast((
+            @as(usize, current_pixel.r) * 3 +
+            @as(usize, current_pixel.g) * 5 +
+            @as(usize, current_pixel.b) * 7 +
+            @as(usize, current_pixel.a) * 11) % 64);
+
+        blk: {
+            // QOI_OP_RGBA
+            if (previous_pixel.a != current_pixel.a) {
+                try writer.writeAll(&[_]u8{
+                    255,
+                    current_pixel.r,
+                    current_pixel.g,
+                    current_pixel.b,
+                    current_pixel.a,
+                });
+
+                break :blk;
+            }
             
             // QOI_OP_DIFF
-            const color_diff = getcolor_diff(previous_pixel, current_pixel);
+            const color_diff = colorDiff(previous_pixel, current_pixel);
             if (checkDiff(color_diff)) {
-                try file_stream_data.append(0b01000000 + (0b010000 * (color_diff.r +% 2)) + (0b0100 * (color_diff.g +% 2)) + (0b01 * (color_diff.b +% 2)));
-                previous_pixel = current_pixel;
-                continue;
-            }
-            
-            // QOI_OP_INDEX
-            const lookup_index: u8 = @intCast((@as(usize, current_pixel.r) * 3 + @as(usize, current_pixel.g) * 5 + @as(usize, current_pixel.b) * 7 + @as(usize, current_pixel.a) * 11) % 64);
-            
-            if (comparePixels(lookup_array[lookup_index], current_pixel) and false) {
-                just_issued_lookup_index = true;
-                if (file_stream_data.items[file_stream_data.items.len - 1] == lookup_index and just_issued_lookup_index) {
-                    break;
-                }
-                else {
-                    try file_stream_data.append(@intCast(lookup_index));
-                    previous_pixel = current_pixel;
-                    continue;
-                }
+                try writer.writeByte(
+                    0b01000000 + (0b010000 * (color_diff.r +% 2)) +
+                    (0b0100 * (color_diff.g +% 2)) + (0b01 * (color_diff.b +% 2))
+                );
+
+                break :blk;
             }
 
-            just_issued_lookup_index = false;
-            
-            lookup_array[lookup_index] = current_pixel;
+            if (!just_issued_lookup and pixelCmp(lookup_array[lookup_index], current_pixel)) {
+                just_issued_lookup = true;
+                try writer.writeByte(@intCast(lookup_index));
+
+                break :blk;
+            }
+
+            just_issued_lookup = false;
 
             // QOI_OP_LUMA
             if (checkLuma(color_diff)) {
-                try file_stream_data.append(0b10000000 + (color_diff.g +% 32));
-                try file_stream_data.append((0b010000 * (color_diff.r -% color_diff.g +% 8)) + (color_diff.b -% color_diff.g +% 8));
-                previous_pixel = current_pixel;
-                continue;
+                try writer.writeAll(&[_]u8{
+                    0b10000000 + (color_diff.g +% 32),
+                    0b010000 * (color_diff.r -% color_diff.g +% 8) + (color_diff.b -% color_diff.g +% 8),
+                });
+
+                break :blk;
             }
 
             // QOI_OP_RGB
-            if (current_pixel.a == previous_pixel.a) {
-                try file_stream_data.append(254);
-                try file_stream_data.append(current_pixel.r);
-                try file_stream_data.append(current_pixel.g);
-                try file_stream_data.append(current_pixel.b);
-            }
-            // QOI_OP_RGBA
-            else {
-                try file_stream_data.append(255);
-                try file_stream_data.append(current_pixel.r);
-                try file_stream_data.append(current_pixel.g);
-                try file_stream_data.append(current_pixel.b);
-                try file_stream_data.append(current_pixel.a);
-            }
+            try writer.writeAll(&[_]u8{
+                254,
+                current_pixel.r,
+                current_pixel.g,
+                current_pixel.b,
+            });
         }
 
         previous_pixel = current_pixel;
+        lookup_array[lookup_index] = current_pixel;
     }
 
-    return;
+    // Write leftover run
+    if (current_run > 0) {
+        try writer.writeByte(0b11000000 + current_run - 1);
+    }
 }
 
-pub fn exportImage(file_name: []const u8, header: *const FileHeader, raw_data: []Rgba) !void {
-    var dba = std.heap.DebugAllocator(.{}){};
-    defer _ = dba.deinit();
-    const allocator = dba.allocator();
+test "simple_encode" {
+    const allocator = std.testing.allocator;
 
-    var file_stream_header: [14]u8 = undefined;
-
-    var file_stream_data = std.ArrayList(u8).init(allocator);
-    defer file_stream_data.deinit();
-
-    const file_stream_end = [_]u8{
-        0, 0, 0, 0, 0, 0, 0, 1
-    };
-
-    try encodeHeader(&file_stream_header, header);
-    try encodeData(&file_stream_data, raw_data);
-
-    const file = try std.fs.cwd().createFile(
-        file_name,
-        .{ .read = true },
-    );
-    defer file.close();
-
-    _ = try file.writeAll(&file_stream_header);
-    _ = try file.writeAll(file_stream_data.items);
-    _ = try file.writeAll(&file_stream_end);
-}
-
-test "encode" {
-    var dba = std.heap.DebugAllocator(.{}){};
-    defer _ = dba.deinit();
-    const allocator = dba.allocator();
-
-    const header = FileHeader{
+    var image = Image{
+        .allocator = allocator,
         .width = 1024,
-        .height = 1024
+        .height = 1024,
+        .pixels = undefined,
+        .format = .r8g8b8a8_srgb,
     };
 
-    const data_stream = try allocator.alloc(Rgba, header.width * header.height);
-    defer allocator.free(data_stream);
+    image.pixels = try allocator.alloc(Rgba, image.width * image.height);
+    defer allocator.free(image.pixels);
 
     //fill data_stream with rgba values
-    for (0..data_stream.len) |i| {
-        data_stream[i] = Rgba{
-            .r = @as(u8, @intCast(i % 256)), .g = @as(u8, @intCast(i % 126)), .b = @as(u8, @intCast(i % 7)),
-            .a = 255
+    for (image.pixels, 0..) |*pixel, i| {
+        pixel.* = Rgba{
+            .r = @as(u8, @intCast(i % 256)),
+            .g = @as(u8, @intCast(i % 128)),
+            .b = @as(u8, @intCast(i % 64)),
+            .a = 255,
         };
     }
 
-    try exportImage("image.qoi", &header, data_stream);
+    try image.writeToFilePath("simple.qoi");
+}
+
+test "noise" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0);
+    const rand = rng.random();
+
+    var image = Image{
+        .allocator = allocator,
+        .width = 1024,
+        .height = 1024,
+        .pixels = undefined,
+        .format = .r8g8b8a8_srgb,
+    };
+
+    image.pixels = try allocator.alloc(Rgba, image.width * image.height);
+    defer allocator.free(image.pixels);
+
+    //fill data_stream with rgba values
+    for (image.pixels) |*pixel| {
+        pixel.* = Rgba{
+            .r = rand.int(u8),
+            .g = rand.int(u8),
+            .b = rand.int(u8),
+            .a = rand.int(u8),
+        };
+    }
+
+    try image.writeToFilePath("random.qoi");
 }
