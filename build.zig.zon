@@ -1,0 +1,11 @@
+.{
+    .name = .zqoi,
+    .version = "0.0.1",
+    .fingerprint = 0xa6fe33171a92e4f7,
+    
+    .paths = .{
+	"src",
+	"build.zig",
+	"build.zig.zon",
+    }
+}
