@@ -60,21 +60,25 @@ pub const Image = struct {
             .colorspace = self.format.toColorspace(),
         };
 
-        var encoded_data = std.ArrayList(u8).init(self.allocator);
-        defer encoded_data.deinit();
-
-        try encodeData(encoded_data.writer(), self.pixels);
-
         const stream_end = [_]u8{
             0, 0, 0, 0, 0, 0, 0, 1
         };
 
+        var encoded_data = try std.ArrayList(u8).initCapacity(
+            self.allocator,
+            //TODO: Double check this
+            self.pixels.len * 5 + @sizeOf(FileHeader) + stream_end.len,
+        );
+        defer encoded_data.deinit();
+
+        try encodeHeader(encoded_data.fixedWriter(), &header);
+        try encodeData(encoded_data.fixedWriter(), self.pixels);
+        encoded_data.appendSliceAssumeCapacity(&stream_end);
+
         const file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
 
-        try encodeHeader(file.writer(), &header);
         _ = try file.writeAll(encoded_data.items);
-        _ = try file.writeAll(&stream_end);
     }
 };
 
@@ -95,26 +99,28 @@ fn encodeHeader(writer: anytype, header: *const FileHeader) !void {
 }
 
 fn pixelCmp(pixel_1: Rgba, pixel_2: Rgba) bool {
-    if (pixel_1.r != pixel_2.r 
-        or pixel_1.g != pixel_2.g 
-        or pixel_1.b != pixel_2.b 
-        or pixel_1.a != pixel_2.a) {
-        return false;
-    }
-    return true;
+    return std.meta.eql(pixel_1, pixel_2);
+}
+
+fn pixelHash(pixel: Rgba) u8 {
+    return @intCast((
+        @as(usize, pixel.r) * 3 +
+        @as(usize, pixel.g) * 5 +
+        @as(usize, pixel.b) * 7 +
+        @as(usize, pixel.a) * 11) % 64);
 }
 
 fn checkLuma(diff: Rgba) bool {
-    if ((diff.g +% 32) >= 64) { return false; }
-    if ((diff.r -% diff.g +% 8) >= 16) { return false; }
-    if ((diff.b -% diff.g +% 8) >= 16) { return false; }
+    if ((diff.g +% 32) >= 64) return false;
+    if ((diff.r -% diff.g +% 8) >= 16) return false;
+    if ((diff.b -% diff.g +% 8) >= 16) return false;
     return true;
 }
 
 fn checkDiff(diff: Rgba) bool {
-    if ((diff.r +% 2) >= 4) { return false; }
-    if ((diff.g +% 2) >= 4) { return false; }
-    if ((diff.b +% 2) >= 4) { return false; }
+    if ((diff.r +% 2) >= 4) return false;
+    if ((diff.g +% 2) >= 4) return false;
+    if ((diff.b +% 2) >= 4) return false;
     return true;
 }
 
@@ -141,7 +147,6 @@ fn encodeData(writer: anytype, raw_data: []Rgba) !void {
     };
 
     var current_run: u8 = 0;
-    var just_issued_lookup: bool = false;
     
     for (raw_data) |current_pixel| {
 
@@ -162,14 +167,15 @@ fn encodeData(writer: anytype, raw_data: []Rgba) !void {
             current_run = 0;
         }
         
-        // QOI_OP_INDEX
-        const lookup_index: u8 = @intCast((
-            @as(usize, current_pixel.r) * 3 +
-            @as(usize, current_pixel.g) * 5 +
-            @as(usize, current_pixel.b) * 7 +
-            @as(usize, current_pixel.a) * 11) % 64);
+        const lookup_index = pixelHash(current_pixel);
 
-        blk: {
+        // QOI_OP_INDEX
+        if (pixelCmp(lookup_array[lookup_index], current_pixel)) {
+            try writer.writeByte(@intCast(lookup_index));
+
+        } else blk: {
+            lookup_array[lookup_index] = current_pixel;
+
             // QOI_OP_RGBA
             if (previous_pixel.a != current_pixel.a) {
                 try writer.writeAll(&[_]u8{
@@ -194,15 +200,6 @@ fn encodeData(writer: anytype, raw_data: []Rgba) !void {
                 break :blk;
             }
 
-            if (!just_issued_lookup and pixelCmp(lookup_array[lookup_index], current_pixel)) {
-                just_issued_lookup = true;
-                try writer.writeByte(@intCast(lookup_index));
-
-                break :blk;
-            }
-
-            just_issued_lookup = false;
-
             // QOI_OP_LUMA
             if (checkLuma(color_diff)) {
                 try writer.writeAll(&[_]u8{
@@ -223,7 +220,6 @@ fn encodeData(writer: anytype, raw_data: []Rgba) !void {
         }
 
         previous_pixel = current_pixel;
-        lookup_array[lookup_index] = current_pixel;
     }
 
     // Write leftover run
