@@ -8,8 +8,12 @@ const QoiOpDiff = 0b0100_0000;
 const QoiOpLuma = 0b1000_0000;
 const QoiOpRun = 0b1100_0000;
 
+const QoiStreamEnd = [_]u8{
+    0, 0, 0, 0, 0, 0, 0, 1
+};
+
 pub const DecodeError = error {
-    TooShort,
+    FileTooShort,
     BadMagic,
     InvalidWidth,
     InvalidHeight,
@@ -97,6 +101,21 @@ pub const Image = struct {
     }
 
     pub fn toFilePath(self: *const @This(), file_path: []const u8) !void {
+        const file = try std.fs.cwd().createFile(file_path, .{});
+        defer file.close();
+
+        var encoded_data = try std.ArrayList(u8).initCapacity(
+            self.allocator,
+            self.pixels.len * (self.format.toChannels() + 1) + @sizeOf(FileHeader) + QoiStreamEnd.len,
+        );
+        defer encoded_data.deinit();
+
+        try self.toMemory(encoded_data.writer());
+
+        _ = try file.writeAll(encoded_data.items);
+    }
+
+    pub fn toMemory(self: *const Self, writer: anytype) !void {
         const header = FileHeader{
             .width = self.width,
             .height = self.height,
@@ -104,24 +123,9 @@ pub const Image = struct {
             .colorspace = self.format.toColorspace(),
         };
 
-        const stream_end = [_]u8{
-            0, 0, 0, 0, 0, 0, 0, 1
-        };
-
-        var encoded_data = try std.ArrayList(u8).initCapacity(
-            self.allocator,
-            self.pixels.len * 5 + @sizeOf(FileHeader) + stream_end.len,
-        );
-        defer encoded_data.deinit();
-
-        try encodeHeader(encoded_data.fixedWriter(), &header);
-        try encodeData(encoded_data.fixedWriter(), self.pixels);
-        encoded_data.appendSliceAssumeCapacity(&stream_end);
-
-        const file = try std.fs.cwd().createFile(file_path, .{});
-        defer file.close();
-
-        _ = try file.writeAll(encoded_data.items);
+        try encodeHeader(writer, &header);
+        try encodeData(writer, self.pixels);
+        _ = try writer.writeAll(&QoiStreamEnd);
     }
 };
 
@@ -265,23 +269,9 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
     }
 }
 
-const PixelReader = struct {
-    data: []const u8,
-    index: usize = 0,
-
-    pub fn readByte(self: *@This()) !u8 {
-        if (self.index >= self.data.len) {
-            return error.QoiDecodeReadOutOfBounds;
-        }
-        
-        self.index += 1;
-        return self.data[self.index - 1];
-    }
-};
-
 fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
     // File must be larger than 'header' + 'stream end'
-    if (data.len <= 14 + 8) return DecodeError.TooShort;
+    if (data.len <= 14 + 8) return DecodeError.FileTooShort;
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.BadMagic;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidWidth;
@@ -304,9 +294,9 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
     var current_pixel = Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 };
     var current_run: u8 = 0;
 
-    var pixel_reader = PixelReader {
-        .data = data[14..(data.len - 8)],
-    };
+    const pixel_slice = data[14..(data.len - 8)];
+    var pixel_stream = std.io.fixedBufferStream(pixel_slice);
+    var pixel_reader = pixel_stream.reader();
 
     const pixels = try allocator.alloc(Rgba, header.width * header.height);
     errdefer allocator.free(pixels);
@@ -317,7 +307,7 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
         if (current_run > 0) {
             current_run -= 1;
         }
-        else if (pixel_reader.index < pixel_reader.data.len) {
+        else if (pixel_reader.context.pos < pixel_slice.len) {
             const b1: u8 = try pixel_reader.readByte();
 
             // QOI_OP_RGB
