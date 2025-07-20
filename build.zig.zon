@@ -1,11 +1,11 @@
-.{
-    .name = .zqoi,
-    .version = "0.1.0",
-    .fingerprint = 0xa6fe33171a92e4f7,
-    
-    .paths = .{
-	"src",
-	"build.zig",
-	"build.zig.zon",
-    }
-}
+.{ .name = .zqoi, .version = "0.1.0", .dependencies = .{
+        .zqoi = .{
+            .url = "../",
+            .hash = "zqoi-0.1.0-9-SSGjw6AADOw5tgO67VdByDjMN5FH3hvtJshwEoblUx",
+        },
+    },
+.fingerprint = 0xa6fe33171a92e4f7, .paths = .{
+    "src",
+    "build.zig",
+    "build.zig.zon",
+} }
