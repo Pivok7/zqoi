@@ -74,7 +74,7 @@ pub const Image = struct {
     pixels: []Rgba,
     format: ImageFormat,
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *const Self) void {
         self.allocator.free(self.pixels);
     }
 
@@ -396,9 +396,9 @@ test "simple_encode" {
         };
     }
 
-    var touch = try std.fs.cwd().makeOpenPath("test", .{});
+    var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
     touch.close();
-    try image.toFilePath("test/simple.qoi");
+    try image.toFilePath("tests_output/simple.qoi");
 }
 
 test "noise" {
@@ -431,20 +431,20 @@ test "noise" {
         };
     }
 
-    var touch = try std.fs.cwd().makeOpenPath("test", .{});
+    var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
     touch.close();
-    try image.toFilePath("test/random.qoi");
+    try image.toFilePath("tests_output/random.qoi");
 }
 
 test "read" {
     const allocator = std.testing.allocator;
 
-    var img = try Image.fromFilePath(allocator, "test/random.qoi");
-    try img.toFilePath("test/copy_random.qoi");
+    var img = try Image.fromFilePath(allocator, "tests_output/random.qoi");
+    try img.toFilePath("tests_output/copy_random.qoi");
     img.deinit();
 
-    img = try Image.fromFilePath(allocator, "test/simple.qoi");
-    try img.toFilePath("test/copy_simple.qoi");
+    img = try Image.fromFilePath(allocator, "tests_output/simple.qoi");
+    try img.toFilePath("tests_output/copy_simple.qoi");
     img.deinit();
 }
 

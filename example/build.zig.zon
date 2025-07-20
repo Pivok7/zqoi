@@ -1,0 +1,10 @@
+.{ .name = .example, .version = "0.1.0", .dependencies = .{
+    .zqoi = .{
+        .url = "../zqoi/",
+        .hash = "zqoi-0.1.0-9-SSGpE6AABb_X88UH5Oy05ekQR6yyHlMEWEpDar5wdH",
+    },
+}, .fingerprint = 0x6eec9b9faca4b9f0, .paths = .{
+    "src",
+    "build.zig",
+    "build.zig.zon",
+} }
