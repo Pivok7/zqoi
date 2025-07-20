@@ -1,7 +1,7 @@
 .{ .name = .example, .version = "0.1.0", .dependencies = .{
     .zqoi = .{
-        .url = "../zqoi/",
-        .hash = "zqoi-0.1.0-9-SSGpE6AABb_X88UH5Oy05ekQR6yyHlMEWEpDar5wdH",
+        .url = "../../zqoi",
+        .hash = "zqoi-0.1.0-9-SSGtE6AADcpd8I9UIfCx6LZUMn77jx2fG5GZ3MddA5",
     },
 }, .fingerprint = 0x6eec9b9faca4b9f0, .paths = .{
     "src",
