@@ -522,7 +522,7 @@ test "read_write" {
     file_2_data = try file_2.readToEndAlloc(allocator, std.math.maxInt(usize));
 
     if (!std.mem.eql(u8, file_1_data, file_2_data)) {
-        std.log.err("random.qoi: input != output!", .{});
+        std.log.err("simple.qoi: input != output!", .{});
         return error.CorruptedOutput;
     }
 
