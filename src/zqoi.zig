@@ -8,7 +8,7 @@ const QoiOpDiff = 0b0100_0000;
 const QoiOpLuma = 0b1000_0000;
 const QoiOpRun = 0b1100_0000;
 
-const QoiStreamEnd = [_]u8{
+pub const QoiStreamEnd = [_]u8{
     0, 0, 0, 0, 0, 0, 0, 1
 };
 
@@ -19,9 +19,10 @@ pub const DecodeError = error {
     InvalidHeight,
     InvalidChannels,
     InvalidColorspace,
+    OutOfBoundsRead,
 };
 
-pub const Rgba = struct {
+pub const Rgba = extern struct {
     r: u8,
     g: u8,
     b: u8,
@@ -86,7 +87,20 @@ pub const Image = struct {
         var image: Image = undefined;
         image.allocator = allocator;
 
-        try decodeFile(image.allocator, data, &image);
+        const header = try decodeHeader(data);
+        image.width = header.width;
+        image.height = header.height;
+        image.format = ImageFormat.new(header.colorspace, header.channels);
+
+        image.pixels = try allocator.alloc(Rgba, header.width * header.height);
+        errdefer allocator.free(image.pixels);
+
+        const pixel_slice = data[14..(data.len - 8)];
+        var pixel_reader = FastReader{
+            .data = pixel_slice,
+        };
+
+        try decodeData(header, image.pixels, &pixel_reader);
         return image;
     }
 
@@ -137,11 +151,11 @@ pub const FileHeader = struct {
     colorspace: Colorspace = .srgb,
 };
 
-fn pixelCmp(pixel_1: Rgba, pixel_2: Rgba) bool {
-    return std.meta.eql(pixel_1, pixel_2);
+inline fn pixelCmp(pixel_1: Rgba, pixel_2: Rgba) bool {
+    return @as(u32, @bitCast(pixel_1)) == @as(u32, @bitCast(pixel_2));
 }
 
-fn pixelHash(pixel: Rgba) u8 {
+inline fn pixelHash(pixel: Rgba) u8 {
     return @intCast((
         @as(usize, pixel.r) * 3 +
         @as(usize, pixel.g) * 5 +
@@ -149,21 +163,21 @@ fn pixelHash(pixel: Rgba) u8 {
         @as(usize, pixel.a) * 11) % 64);
 }
 
-fn checkLuma(diff: Rgba) bool {
+inline fn checkLuma(diff: Rgba) bool {
     if ((diff.g +% 32) >= 64) return false;
     if ((diff.r -% diff.g +% 8) >= 16) return false;
     if ((diff.b -% diff.g +% 8) >= 16) return false;
     return true;
 }
 
-fn checkDiff(diff: Rgba) bool {
+inline fn checkDiff(diff: Rgba) bool {
     if ((diff.r +% 2) >= 4) return false;
     if ((diff.g +% 2) >= 4) return false;
     if ((diff.b +% 2) >= 4) return false;
     return true;
 }
 
-fn colorDiff(pixel_1: Rgba, pixel_2: Rgba) Rgba {
+inline fn colorDiff(pixel_1: Rgba, pixel_2: Rgba) Rgba {
     const diff = Rgba{
         .r = pixel_2.r -% pixel_1.r,
         .g = pixel_2.g -% pixel_1.g,
@@ -190,7 +204,6 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
     var previous_pixel = Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 };
     
     for (data) |current_pixel| {
-
         // QOI_OP_RUN
         if (pixelCmp(current_pixel, previous_pixel)) {
             current_run += 1;
@@ -269,9 +282,9 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
     }
 }
 
-fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
-    // File must be larger than 'header' + 'stream end'
-    if (data.len <= 14 + 8) return DecodeError.FileTooShort;
+fn decodeHeader(data: []const u8) DecodeError!FileHeader {
+    // File must be larger than 'header'
+    if (data.len <= 14) return DecodeError.FileTooShort;
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.BadMagic;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidWidth;
@@ -279,27 +292,40 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
     if (data[12] < 3 or data[12] > 4) return DecodeError.InvalidChannels;
     if (data[13] > 1) return DecodeError.InvalidColorspace;
 
-    const header = FileHeader{
+    return .{
         .magic = data[0..4],
         .width = std.mem.readInt(u32, data[4..8], .big),
         .height = std.mem.readInt(u32, data[8..12], .big),
         .channels = data[12],
         .colorspace = @enumFromInt(data[13]),
     };
-    // Header processing end
+}
 
+const FastReader = struct {
+    data: []const u8,
+    pos: usize = 0,
+
+    pub fn readUnsafe(self: *@This()) u8 {
+        self.pos += 1;
+        return self.data[self.pos - 1];
+    }
+
+    pub fn readSafe(self: *@This()) DecodeError!u8 {
+        if (self.pos >= self.data.len) {
+            return DecodeError.OutOfBoundsRead;
+        }
+
+        self.pos += 1;
+        return self.data[self.pos - 1];
+    }
+};
+
+fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeError!void {
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
     var current_pixel = Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 };
     var current_run: u8 = 0;
-
-    const pixel_slice = data[14..(data.len - 8)];
-    var pixel_stream = std.io.fixedBufferStream(pixel_slice);
-    var pixel_reader = pixel_stream.reader();
-
-    const pixels = try allocator.alloc(Rgba, header.width * header.height);
-    errdefer allocator.free(pixels);
 
     const mask2: u8 = 0b1100_0000;
 
@@ -307,21 +333,23 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
         if (current_run > 0) {
             current_run -= 1;
         }
-        else if (pixel_reader.context.pos < pixel_slice.len) {
-            const b1: u8 = try pixel_reader.readByte();
+        // We only check array bounds if we are close to the array length
+        // Unsafe version
+        else if (reader.pos < reader.data.len - 4) {
+            const b1: u8 = reader.readUnsafe();
 
             // QOI_OP_RGB
             if (b1 == QoiOpRgb) {
-                current_pixel.r = try pixel_reader.readByte(); 
-                current_pixel.g = try pixel_reader.readByte();
-                current_pixel.b = try pixel_reader.readByte();
+                current_pixel.r = reader.readUnsafe();
+                current_pixel.g = reader.readUnsafe();
+                current_pixel.b = reader.readUnsafe();
             }
             // QOI_OP_RGBA
             else if (b1 == QoiOpRgba) {
-                current_pixel.r = try pixel_reader.readByte(); 
-                current_pixel.g = try pixel_reader.readByte();
-                current_pixel.b = try pixel_reader.readByte();
-                current_pixel.a = try pixel_reader.readByte();
+                current_pixel.r = reader.readUnsafe();
+                current_pixel.g = reader.readUnsafe();
+                current_pixel.b = reader.readUnsafe();
+                current_pixel.a = reader.readUnsafe();
             }
             // QOI_OP_INDEX
             else if ((b1 & mask2) == QoiOpIndex) {
@@ -335,7 +363,7 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
             }
             // QOI_OP_LUMA
             else if ((b1 & mask2) == QoiOpLuma) {
-                const b2: u8 = try pixel_reader.readByte();
+                const b2: u8 = reader.readUnsafe();
                 const vg: u8 = (b1 & 0x3f) -% 32;
                 current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
                 current_pixel.g +%= vg;
@@ -343,7 +371,48 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
             }
             // QOI_OP_RUN
             else if ((b1 & mask2) == QoiOpRun) {
-                    current_run = (b1 & 0x3f);
+                current_run = (b1 & 0x3f);
+            }
+
+            lookup_array[pixelHash(current_pixel) & (64 - 1)] = current_pixel;
+        // Safe version
+        } else {
+            const b1: u8 = try reader.readSafe();
+
+            // QOI_OP_RGB
+            if (b1 == QoiOpRgb) {
+                current_pixel.r = try reader.readSafe();
+                current_pixel.g = try reader.readSafe();
+                current_pixel.b = try reader.readSafe();
+            }
+            // QOI_OP_RGBA
+            else if (b1 == QoiOpRgba) {
+                current_pixel.r = try reader.readSafe();
+                current_pixel.g = try reader.readSafe();
+                current_pixel.b = try reader.readSafe();
+                current_pixel.a = try reader.readSafe();
+            }
+            // QOI_OP_INDEX
+            else if ((b1 & mask2) == QoiOpIndex) {
+                current_pixel = lookup_array[b1];
+            }
+            // QOI_OP_DIFF
+            else if ((b1 & mask2) == QoiOpDiff) {
+                current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
+                current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
+                current_pixel.b +%= ( b1       & 0x03) -% 2;
+            }
+            // QOI_OP_LUMA
+            else if ((b1 & mask2) == QoiOpLuma) {
+                const b2: u8 = try reader.readSafe();
+                const vg: u8 = (b1 & 0x3f) -% 32;
+                current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
+                current_pixel.g +%= vg;
+                current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
+            }
+            // QOI_OP_RUN
+            else if ((b1 & mask2) == QoiOpRun) {
+                current_run = (b1 & 0x3f);
             }
 
             lookup_array[pixelHash(current_pixel) & (64 - 1)] = current_pixel;
@@ -356,11 +425,6 @@ fn decodeFile(allocator: Allocator, data: []const u8, image: *Image) !void {
         if (header.channels == 4) pixel.a = current_pixel.a
         else pixel.a = 255;
     }
-
-    image.width = header.width;
-    image.height = header.height;
-    image.format = ImageFormat.new(header.colorspace, header.channels);
-    image.pixels = pixels;
 }
 
 test "simple_encode" {
@@ -426,20 +490,49 @@ test "noise" {
     try image.toFilePath("tests_output/random.qoi");
 }
 
-test "read" {
+test "read_write" {
     const allocator = std.testing.allocator;
 
     var img = try Image.fromFilePath(allocator, "tests_output/random.qoi");
     try img.toFilePath("tests_output/copy_random.qoi");
     img.deinit();
 
+    var file_1 = try std.fs.cwd().openFile("tests_output/random.qoi", .{});
+    var file_2 = try std.fs.cwd().openFile("tests_output/copy_random.qoi", .{});
+    var file_1_data = try file_1.readToEndAlloc(allocator, std.math.maxInt(usize));
+    var file_2_data = try file_2.readToEndAlloc(allocator, std.math.maxInt(usize));
+
+    if (!std.mem.eql(u8, file_1_data, file_2_data)) {
+        std.log.err("random.qoi: input != output!", .{});
+        return error.CorruptedOutput;
+    }
+
+    allocator.free(file_1_data);
+    allocator.free(file_2_data);
+    file_1.close();
+    file_2.close();
+
     img = try Image.fromFilePath(allocator, "tests_output/simple.qoi");
     try img.toFilePath("tests_output/copy_simple.qoi");
     img.deinit();
+
+    file_1 = try std.fs.cwd().openFile("tests_output/simple.qoi", .{});
+    file_2 = try std.fs.cwd().openFile("tests_output/copy_simple.qoi", .{});
+    file_1_data = try file_1.readToEndAlloc(allocator, std.math.maxInt(usize));
+    file_2_data = try file_2.readToEndAlloc(allocator, std.math.maxInt(usize));
+
+    if (!std.mem.eql(u8, file_1_data, file_2_data)) {
+        std.log.err("random.qoi: input != output!", .{});
+        return error.CorruptedOutput;
+    }
+
+    allocator.free(file_1_data);
+    allocator.free(file_2_data);
+    file_1.close();
+    file_2.close();
 }
 
-// This will probably throw errors but as long as
-// 'Fuzz finished' gets printed it's fine
+// Fuzzer taken from https://github.com/ikskuh/zig-qoi
 test "input fuzzer" {
     const allocator = std.testing.allocator;
 
@@ -458,8 +551,8 @@ test "input fuzzer" {
 
             try encodeHeader(header_stream.writer(),
                 &FileHeader{
-                    .width = rng.int(u14),
-                    .height = rng.int(u14),
+                    .width = rng.int(u16),
+                    .height = rng.int(u16),
                     .channels = rng.int(u8) % 2 + 3,
                     .colorspace = @enumFromInt(rng.int(u8) % 2),
                 }
