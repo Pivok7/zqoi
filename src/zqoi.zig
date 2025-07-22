@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const QoiOp = struct {
@@ -103,7 +104,7 @@ pub const Image = struct {
             .data = data[14..(data.len - 8)],
         };
 
-        try decodeData(image.pixels, &pixel_reader);
+        try decodeData(header, image.pixels, &pixel_reader);
         return image;
     }
 
@@ -159,11 +160,10 @@ inline fn pixelCmp(a: Rgba, b: Rgba) bool {
 }
 
 inline fn pixelHash(pixel: Rgba) u8 {
-    return @intCast((
-        @as(usize, pixel.r) * 3 +
-        @as(usize, pixel.g) * 5 +
-        @as(usize, pixel.b) * 7 +
-        @as(usize, pixel.a) * 11) % 64);
+    const vp = @Vector(4, u8){ pixel.r, pixel.g, pixel.b, pixel.a };
+    const weights = @Vector(4, u8){ 3, 5, 7, 11 };
+    const sum = @reduce(.Add, vp *% weights);
+    return @truncate(sum & 63);
 }
 
 inline fn checkLuma(diff: Rgba) bool {
@@ -180,15 +180,13 @@ inline fn checkDiff(diff: Rgba) bool {
     return true;
 }
 
-inline fn colorDiff(pixel_1: Rgba, pixel_2: Rgba) Rgba {
-    const diff = Rgba{
-        .r = pixel_2.r -% pixel_1.r,
-        .g = pixel_2.g -% pixel_1.g,
-        .b = pixel_2.b -% pixel_1.b,
+inline fn colorDiff(a: Rgba, b: Rgba) Rgba {
+    return .{
+        .r = b.r -% a.r,
+        .g = b.g -% a.g,
+        .b = b.b -% a.b,
         .a = 0,
     };
-
-    return diff;
 }
 
 fn encodeHeader(writer: anytype, header: *const FileHeader) !void {
@@ -325,7 +323,9 @@ const FastReader = struct {
     }
 };
 
-fn decodeData(pixels: []Rgba, reader: *FastReader) DecodeError!void {
+fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeError!void {
+    const channel_mask: u8 = if (header.channels == 3) 0xff else 0x00;
+
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
@@ -354,7 +354,7 @@ fn decodeData(pixels: []Rgba, reader: *FastReader) DecodeError!void {
                 current_pixel.r = reader.readUnsafe();
                 current_pixel.g = reader.readUnsafe();
                 current_pixel.b = reader.readUnsafe();
-                current_pixel.a = reader.readUnsafe();
+                current_pixel.a = reader.readUnsafe() | channel_mask;
             }
             // QOI_OP_INDEX
             else if ((b1 & mask2) == QoiOp.Index) {
@@ -398,7 +398,7 @@ fn decodeData(pixels: []Rgba, reader: *FastReader) DecodeError!void {
                 current_pixel.r = try reader.readSafe();
                 current_pixel.g = try reader.readSafe();
                 current_pixel.b = try reader.readSafe();
-                current_pixel.a = try reader.readSafe();
+                current_pixel.a = try reader.readSafe() | channel_mask;
             }
             // QOI_OP_INDEX
             else if ((b1 & mask2) == QoiOp.Index) {
