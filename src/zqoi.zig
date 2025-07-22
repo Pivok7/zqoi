@@ -1,12 +1,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const QoiOpRgb = 0b1111_1110;
-const QoiOpRgba = 0b1111_1111;
-const QoiOpIndex = 0b0000_0000;
-const QoiOpDiff = 0b0100_0000;
-const QoiOpLuma = 0b1000_0000;
-const QoiOpRun = 0b1100_0000;
+const QoiOp = struct {
+    pub const Rgb = 0b1111_1110;
+    pub const Rgba = 0b1111_1111;
+    pub const Index = 0b0000_0000;
+    pub const Diff = 0b0100_0000;
+    pub const Luma = 0b1000_0000;
+    pub const Run = 0b1100_0000;
+};
 
 pub const QoiStreamEnd = [_]u8{
     0, 0, 0, 0, 0, 0, 0, 1
@@ -20,6 +22,7 @@ pub const DecodeError = error {
     InvalidChannels,
     InvalidColorspace,
     OutOfBoundsRead,
+    LeftoverData,
 };
 
 pub const Rgba = extern struct {
@@ -95,12 +98,12 @@ pub const Image = struct {
         image.pixels = try allocator.alloc(Rgba, header.width * header.height);
         errdefer allocator.free(image.pixels);
 
-        const pixel_slice = data[14..(data.len - 8)];
+        // We create reader from the fragment containing only the pixel info
         var pixel_reader = FastReader{
-            .data = pixel_slice,
+            .data = data[14..(data.len - 8)],
         };
 
-        try decodeData(header, image.pixels, &pixel_reader);
+        try decodeData(image.pixels, &pixel_reader);
         return image;
     }
 
@@ -151,8 +154,8 @@ pub const FileHeader = struct {
     colorspace: Colorspace = .srgb,
 };
 
-inline fn pixelCmp(pixel_1: Rgba, pixel_2: Rgba) bool {
-    return @as(u32, @bitCast(pixel_1)) == @as(u32, @bitCast(pixel_2));
+inline fn pixelCmp(a: Rgba, b: Rgba) bool {
+    return @as(u32, @bitCast(a)) == @as(u32, @bitCast(b));
 }
 
 inline fn pixelHash(pixel: Rgba) u8 {
@@ -209,7 +212,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
             current_run += 1;
 
             if (current_run >= 62) {
-                try writer.writeByte(0b11000000 + 61);
+                try writer.writeByte(QoiOp.Run + 61);
                 current_run = 0;
             }
 
@@ -217,7 +220,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
         }
 
         if (current_run > 0) {
-            try writer.writeByte(0b11000000 + current_run - 1);
+            try writer.writeByte(QoiOp.Run + current_run - 1);
             current_run = 0;
         }
         
@@ -228,6 +231,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
             try writer.writeByte(@intCast(lookup_index));
 
         } else blk: {
+            @branchHint(.likely);
             lookup_array[lookup_index] = current_pixel;
 
             // QOI_OP_RGBA
@@ -247,7 +251,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
             const color_diff = colorDiff(previous_pixel, current_pixel);
             if (checkDiff(color_diff)) {
                 try writer.writeByte(
-                    0b01000000 + (0b010000 * (color_diff.r +% 2)) +
+                    QoiOp.Diff + (0b01_0000 * (color_diff.r +% 2)) +
                     (0b0100 * (color_diff.g +% 2)) + (0b01 * (color_diff.b +% 2))
                 );
 
@@ -256,9 +260,10 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
 
             // QOI_OP_LUMA
             if (checkLuma(color_diff)) {
+                @branchHint(.likely);
                 try writer.writeAll(&[_]u8{
-                    0b10000000 + (color_diff.g +% 32),
-                    0b010000 * (color_diff.r -% color_diff.g +% 8) + (color_diff.b -% color_diff.g +% 8),
+                    QoiOp.Luma + (color_diff.g +% 32),
+                    0b01_0000 * (color_diff.r -% color_diff.g +% 8) + (color_diff.b -% color_diff.g +% 8),
                 });
 
                 break :blk;
@@ -278,13 +283,13 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
 
     // Write leftover run
     if (current_run > 0) {
-        try writer.writeByte(0b11000000 + current_run - 1);
+        try writer.writeByte(QoiOp.Run + current_run - 1);
     }
 }
 
 fn decodeHeader(data: []const u8) DecodeError!FileHeader {
-    // File must be larger than 'header'
-    if (data.len <= 14) return DecodeError.FileTooShort;
+    // File must be larger than 'header' + 'stream_end'
+    if (data.len <= 14 + QoiStreamEnd.len) return DecodeError.FileTooShort;
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.BadMagic;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidWidth;
@@ -320,7 +325,7 @@ const FastReader = struct {
     }
 };
 
-fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeError!void {
+fn decodeData(pixels: []Rgba, reader: *FastReader) DecodeError!void {
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
@@ -339,30 +344,32 @@ fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeErr
             const b1: u8 = reader.readUnsafe();
 
             // QOI_OP_RGB
-            if (b1 == QoiOpRgb) {
+            if (b1 == QoiOp.Rgb) {
                 current_pixel.r = reader.readUnsafe();
                 current_pixel.g = reader.readUnsafe();
                 current_pixel.b = reader.readUnsafe();
             }
             // QOI_OP_RGBA
-            else if (b1 == QoiOpRgba) {
+            else if (b1 == QoiOp.Rgba) {
                 current_pixel.r = reader.readUnsafe();
                 current_pixel.g = reader.readUnsafe();
                 current_pixel.b = reader.readUnsafe();
                 current_pixel.a = reader.readUnsafe();
             }
             // QOI_OP_INDEX
-            else if ((b1 & mask2) == QoiOpIndex) {
+            else if ((b1 & mask2) == QoiOp.Index) {
+                @branchHint(.likely);
                 current_pixel = lookup_array[b1];
             }
             // QOI_OP_DIFF
-            else if ((b1 & mask2) == QoiOpDiff) {
+            else if ((b1 & mask2) == QoiOp.Diff) {
                 current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
                 current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
                 current_pixel.b +%= ( b1       & 0x03) -% 2;
             }
             // QOI_OP_LUMA
-            else if ((b1 & mask2) == QoiOpLuma) {
+            else if ((b1 & mask2) == QoiOp.Luma) {
+                @branchHint(.likely);
                 const b2: u8 = reader.readUnsafe();
                 const vg: u8 = (b1 & 0x3f) -% 32;
                 current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
@@ -370,40 +377,41 @@ fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeErr
                 current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
             }
             // QOI_OP_RUN
-            else if ((b1 & mask2) == QoiOpRun) {
+            else if ((b1 & mask2) == QoiOp.Run) {
                 current_run = (b1 & 0x3f);
             }
 
             lookup_array[pixelHash(current_pixel) & (64 - 1)] = current_pixel;
         // Safe version
         } else {
+            @branchHint(.cold);
             const b1: u8 = try reader.readSafe();
 
             // QOI_OP_RGB
-            if (b1 == QoiOpRgb) {
+            if (b1 == QoiOp.Rgb) {
                 current_pixel.r = try reader.readSafe();
                 current_pixel.g = try reader.readSafe();
                 current_pixel.b = try reader.readSafe();
             }
             // QOI_OP_RGBA
-            else if (b1 == QoiOpRgba) {
+            else if (b1 == QoiOp.Rgba) {
                 current_pixel.r = try reader.readSafe();
                 current_pixel.g = try reader.readSafe();
                 current_pixel.b = try reader.readSafe();
                 current_pixel.a = try reader.readSafe();
             }
             // QOI_OP_INDEX
-            else if ((b1 & mask2) == QoiOpIndex) {
+            else if ((b1 & mask2) == QoiOp.Index) {
                 current_pixel = lookup_array[b1];
             }
             // QOI_OP_DIFF
-            else if ((b1 & mask2) == QoiOpDiff) {
+            else if ((b1 & mask2) == QoiOp.Diff) {
                 current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
                 current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
                 current_pixel.b +%= ( b1       & 0x03) -% 2;
             }
             // QOI_OP_LUMA
-            else if ((b1 & mask2) == QoiOpLuma) {
+            else if ((b1 & mask2) == QoiOp.Luma) {
                 const b2: u8 = try reader.readSafe();
                 const vg: u8 = (b1 & 0x3f) -% 32;
                 current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
@@ -411,19 +419,18 @@ fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeErr
                 current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
             }
             // QOI_OP_RUN
-            else if ((b1 & mask2) == QoiOpRun) {
+            else if ((b1 & mask2) == QoiOp.Run) {
                 current_run = (b1 & 0x3f);
             }
 
             lookup_array[pixelHash(current_pixel) & (64 - 1)] = current_pixel;
         }
 
-        pixel.r = current_pixel.r;
-        pixel.g = current_pixel.g;
-        pixel.b = current_pixel.b;
+        pixel.* = current_pixel;
+    }
 
-        if (header.channels == 4) pixel.a = current_pixel.a
-        else pixel.a = 255;
+    if (reader.pos < reader.data.len) {
+        return DecodeError.LeftoverData;
     }
 }
 
