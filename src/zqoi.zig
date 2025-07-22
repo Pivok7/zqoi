@@ -160,7 +160,7 @@ inline fn pixelCmp(a: Rgba, b: Rgba) bool {
 }
 
 inline fn pixelHash(pixel: Rgba) u8 {
-    const vp = @Vector(4, u8){ pixel.r, pixel.g, pixel.b, pixel.a };
+    const vp: @Vector(4, u8) = @bitCast(pixel);
     const weights = @Vector(4, u8){ 3, 5, 7, 11 };
     const sum = @reduce(.Add, vp *% weights);
     return @truncate(sum & 63);
@@ -381,7 +381,7 @@ fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeErr
                 current_run = (b1 & 0x3f);
             }
 
-            lookup_array[pixelHash(current_pixel) & (64 - 1)] = current_pixel;
+            lookup_array[pixelHash(current_pixel)] = current_pixel;
         // Safe version
         } else {
             @branchHint(.cold);
@@ -423,7 +423,7 @@ fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeErr
                 current_run = (b1 & 0x3f);
             }
 
-            lookup_array[pixelHash(current_pixel) & (64 - 1)] = current_pixel;
+            lookup_array[pixelHash(current_pixel)] = current_pixel;
         }
 
         pixel.* = current_pixel;
