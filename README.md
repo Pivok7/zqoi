@@ -1,6 +1,6 @@
 # Zqoi
 
-Qoi decoder/encoder written in pure Zig with speed comparable to the reference implementation
+QOI decoder/encoder written in pure Zig with speed comparable to the reference implementation
 
 ## Using
 
@@ -67,6 +67,8 @@ pub fn main() !void {
 
 Benchmarks performed on the images from https://qoiformat.org/benchmark/
 
+Allocator used: raw_c_allocator
+
 CPU: AMD Ryzen 7 5700X
 
 Here are some of the results:
@@ -79,7 +81,7 @@ Here are some of the results:
 |photo_kodak    |-      |-          |
 |decode:		|1.88   |1.9        |
 |encode:		|2.29   |2.5        |
-|photo_tecnik   |-      |-          |
+|photo_tecnick  |-      |-          |
 |decode:		|6.94   |7.0        |
 |encode:		|8.48   |9.6        |
 |pngimg         |-      |-          |

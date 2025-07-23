@@ -15,9 +15,13 @@ pub const QoiStreamEnd = [_]u8{
     0, 0, 0, 0, 0, 0, 0, 1
 };
 
+pub const EncodeError = error {
+    InvalidSize
+};
+
 pub const DecodeError = error {
     FileTooShort,
-    BadMagic,
+    NotQoi,
     InvalidWidth,
     InvalidHeight,
     InvalidChannels,
@@ -110,15 +114,20 @@ pub const Image = struct {
 
     pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
         var file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
 
-        const file_data = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+        const file_data = file.reader().readAllAlloc(allocator, std.math.maxInt(usize)) catch |err| {
+            file.close();
+            return err;
+        };
         defer allocator.free(file_data);
+
+        file.close();
 
         return try Image.fromMemory(allocator, file_data);
     }
 
     pub fn toFilePath(self: *const @This(), file_path: []const u8) !void {
+        if (!self.isValidSize()) return EncodeError.InvalidSize;
         const file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
 
@@ -134,6 +143,8 @@ pub const Image = struct {
     }
 
     pub fn toMemory(self: *const Self, writer: anytype) !void {
+        if (!self.isValidSize()) return EncodeError.InvalidSize;
+
         const header = FileHeader{
             .width = self.width,
             .height = self.height,
@@ -144,6 +155,10 @@ pub const Image = struct {
         try encodeHeader(writer, &header);
         try encodeData(writer, self.pixels);
         _ = try writer.writeAll(&QoiStreamEnd);
+    }
+
+    pub fn isValidSize(self: *const Self) bool {
+        return (self.width * self.height == self.pixels.len);
     }
 };
 
@@ -289,7 +304,7 @@ fn decodeHeader(data: []const u8) DecodeError!FileHeader {
     // File must be larger than 'header' + 'stream_end'
     if (data.len <= 14 + QoiStreamEnd.len) return DecodeError.FileTooShort;
 
-    if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.BadMagic;
+    if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.NotQoi;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidWidth;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidHeight;
     if (data[12] < 3 or data[12] > 4) return DecodeError.InvalidChannels;
@@ -308,7 +323,7 @@ const FastReader = struct {
     data: []const u8,
     pos: usize = 0,
 
-    pub fn readUnsafe(self: *@This()) u8 {
+    pub inline fn readUnsafe(self: *@This()) u8 {
         self.pos += 1;
         return self.data[self.pos - 1];
     }
