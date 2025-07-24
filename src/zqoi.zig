@@ -16,7 +16,8 @@ pub const QoiStreamEnd = [_]u8{
 };
 
 pub const EncodeError = error {
-    InvalidSize
+    InvalidSize,
+    CorruptedHeader,
 };
 
 pub const DecodeError = error {
@@ -152,6 +153,8 @@ pub const Image = struct {
             .colorspace = self.format.toColorspace(),
         };
 
+        if (!header.isValid()) return EncodeError.CorruptedHeader;
+
         try encodeHeader(writer, &header);
         try encodeData(writer, self.pixels);
         _ = try writer.writeAll(&QoiStreamEnd);
@@ -168,6 +171,34 @@ pub const FileHeader = struct {
     height: u32,
     channels: u8 = 4,
     colorspace: Colorspace = .srgb,
+
+    pub fn isValid(self: *const @This()) bool {
+        if (!std.mem.eql(u8, self.magic, "qoif")) return false;
+        if (self.width == 0) return false;
+        if (self.height == 0) return false;
+        if (self.channels < 3 or self.channels > 4) return false;
+        // Don't need to check the colorspace since it's an enum
+        return true;
+    }
+};
+
+const FastReader = struct {
+    data: []const u8,
+    pos: usize = 0,
+
+    pub inline fn readUnsafe(self: *@This()) u8 {
+        self.pos += 1;
+        return self.data[self.pos - 1];
+    }
+
+    pub fn readSafe(self: *@This()) DecodeError!u8 {
+        if (self.pos >= self.data.len) {
+            return DecodeError.OutOfBoundsRead;
+        }
+
+        self.pos += 1;
+        return self.data[self.pos - 1];
+    }
 };
 
 inline fn pixelCmp(a: Rgba, b: Rgba) bool {
@@ -306,7 +337,7 @@ fn decodeHeader(data: []const u8) DecodeError!FileHeader {
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.NotQoi;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidWidth;
-    if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidHeight;
+    if (std.mem.readInt(u32, data[8..12], .big) == 0) return DecodeError.InvalidHeight;
     if (data[12] < 3 or data[12] > 4) return DecodeError.InvalidChannels;
     if (data[13] > 1) return DecodeError.InvalidColorspace;
 
@@ -318,25 +349,6 @@ fn decodeHeader(data: []const u8) DecodeError!FileHeader {
         .colorspace = @enumFromInt(data[13]),
     };
 }
-
-const FastReader = struct {
-    data: []const u8,
-    pos: usize = 0,
-
-    pub inline fn readUnsafe(self: *@This()) u8 {
-        self.pos += 1;
-        return self.data[self.pos - 1];
-    }
-
-    pub fn readSafe(self: *@This()) DecodeError!u8 {
-        if (self.pos >= self.data.len) {
-            return DecodeError.OutOfBoundsRead;
-        }
-
-        self.pos += 1;
-        return self.data[self.pos - 1];
-    }
-};
 
 fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeError!void {
     const channel_mask: u8 = if (header.channels == 3) 0xff else 0x00;
