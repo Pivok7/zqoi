@@ -9,7 +9,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/zqoi.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = optimize != .Debug,
     });
     
     // Test step
