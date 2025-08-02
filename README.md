@@ -8,6 +8,7 @@ You will need:
 
 * Zig compiler 0.14.1
 
+Fetch:
 ```bash
 zig fetch --save git+https://github.com/Pivok7/zqoi
 ```
