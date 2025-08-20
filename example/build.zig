@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("zqoi", zqoi_dep.module("zqoi"));
-    
+
     b.installArtifact(exe);
 
     // Run step

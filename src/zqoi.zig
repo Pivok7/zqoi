@@ -249,7 +249,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
 
     var current_run: u8 = 0;
     var previous_pixel = Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 };
-    
+
     for (data) |current_pixel| {
         // QOI_OP_RUN
         if (pixelCmp(current_pixel, previous_pixel)) {
@@ -267,7 +267,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
             try writer.writeByte(QoiOp.Run + current_run - 1);
             current_run = 0;
         }
-        
+
         const lookup_index = pixelHash(current_pixel);
 
         // QOI_OP_INDEX
@@ -290,7 +290,7 @@ fn encodeData(writer: anytype, data: []Rgba) !void {
 
                 break :blk;
             }
-            
+
             // QOI_OP_DIFF
             const color_diff = colorDiff(previous_pixel, current_pixel);
             if (checkDiff(color_diff)) {
