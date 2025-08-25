@@ -6,7 +6,7 @@ QOI decoder/encoder written in pure Zig with speed comparable to the reference i
 
 You will need:
 
-* Zig compiler 0.14.1
+* Zig compiler 0.15.1
 
 Fetch:
 ```bash
