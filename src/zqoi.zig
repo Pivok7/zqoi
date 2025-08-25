@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const Writer = std.io.Writer;
+const Reader = std.io.Reader;
 
 const QoiOp = struct {
     pub const Rgb = 0b1111_1110;
@@ -114,15 +116,8 @@ pub const Image = struct {
     }
 
     pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
-        var file = try std.fs.cwd().openFile(path, .{});
-
-        const file_data = file.reader().readAllAlloc(allocator, std.math.maxInt(usize)) catch |err| {
-            file.close();
-            return err;
-        };
+        const file_data = try readFileAlloc(allocator, path);
         defer allocator.free(file_data);
-
-        file.close();
 
         return try Image.fromMemory(allocator, file_data);
     }
@@ -132,18 +127,20 @@ pub const Image = struct {
         const file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
 
-        var encoded_data = try std.ArrayList(u8).initCapacity(
+        var encoded_data_aw = try Writer.Allocating.initCapacity(
             self.allocator,
             self.pixels.len * (self.format.toChannels() + 1) + @sizeOf(FileHeader) + QoiStreamEnd.len,
         );
-        defer encoded_data.deinit();
 
-        try self.toMemory(encoded_data.writer());
+        try self.toMemory(&encoded_data_aw.writer);
 
-        _ = try file.writeAll(encoded_data.items);
+        const encoded_data = try encoded_data_aw.toOwnedSlice();
+        defer self.allocator.free(encoded_data);
+
+        _ = try file.writeAll(encoded_data);
     }
 
-    pub fn toMemory(self: *const Self, writer: anytype) !void {
+    pub fn toMemory(self: *const Self, writer: *Writer) !void {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
 
         const header = FileHeader{
@@ -235,7 +232,7 @@ inline fn colorDiff(a: Rgba, b: Rgba) Rgba {
     };
 }
 
-fn encodeHeader(writer: anytype, header: *const FileHeader) !void {
+fn encodeHeader(writer: *Writer, header: *const FileHeader) !void {
     try writer.writeAll(header.magic);
     try writer.writeInt(u32, header.width, .big);
     try writer.writeInt(u32, header.height, .big);
@@ -243,7 +240,7 @@ fn encodeHeader(writer: anytype, header: *const FileHeader) !void {
     try writer.writeByte(@intFromEnum(header.colorspace));
 }
 
-fn encodeData(writer: anytype, data: []Rgba) !void {
+fn encodeData(writer: *Writer, data: []Rgba) !void {
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
@@ -461,6 +458,18 @@ fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeErr
     }
 }
 
+fn readFileAlloc(allocator: Allocator, path: []const u8) ![]const u8 {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const file_fs_reader_buf = try allocator.alloc(u8, try file.getEndPos());
+    var file_fs_reader = file.reader(file_fs_reader_buf);
+    const file_reader = &file_fs_reader.interface;
+
+    _ = try file_reader.take(file_fs_reader_buf.len);
+    return file_fs_reader_buf;
+}
+
 test "simple_encode" {
     const allocator = std.testing.allocator;
 
@@ -531,10 +540,11 @@ test "read_write" {
     try img.toFilePath("tests_output/copy_random.qoi");
     img.deinit();
 
-    var file_1 = try std.fs.cwd().openFile("tests_output/random.qoi", .{});
-    var file_2 = try std.fs.cwd().openFile("tests_output/copy_random.qoi", .{});
-    var file_1_data = try file_1.readToEndAlloc(allocator, std.math.maxInt(usize));
-    var file_2_data = try file_2.readToEndAlloc(allocator, std.math.maxInt(usize));
+    const file_1_path = "tests_output/random.qoi";
+    const file_2_path = "tests_output/copy_random.qoi";
+
+    var file_1_data = try readFileAlloc(allocator, file_1_path);
+    var file_2_data = try readFileAlloc(allocator, file_2_path);
 
     if (!std.mem.eql(u8, file_1_data, file_2_data)) {
         std.log.err("random.qoi: input != output!", .{});
@@ -543,17 +553,13 @@ test "read_write" {
 
     allocator.free(file_1_data);
     allocator.free(file_2_data);
-    file_1.close();
-    file_2.close();
 
     img = try Image.fromFilePath(allocator, "tests_output/simple.qoi");
     try img.toFilePath("tests_output/copy_simple.qoi");
     img.deinit();
 
-    file_1 = try std.fs.cwd().openFile("tests_output/simple.qoi", .{});
-    file_2 = try std.fs.cwd().openFile("tests_output/copy_simple.qoi", .{});
-    file_1_data = try file_1.readToEndAlloc(allocator, std.math.maxInt(usize));
-    file_2_data = try file_2.readToEndAlloc(allocator, std.math.maxInt(usize));
+    file_1_data = try readFileAlloc(allocator, file_1_path);
+    file_2_data = try readFileAlloc(allocator, file_2_path);
 
     if (!std.mem.eql(u8, file_1_data, file_2_data)) {
         std.log.err("simple.qoi: input != output!", .{});
@@ -562,8 +568,6 @@ test "read_write" {
 
     allocator.free(file_1_data);
     allocator.free(file_2_data);
-    file_1.close();
-    file_2.close();
 }
 
 // Fuzzer taken from https://github.com/ikskuh/zig-qoi
@@ -581,9 +585,10 @@ test "input fuzzer" {
 
         if ((rounds % 4) != 0) { // 25% is fully random 75% has a correct looking header
             var header: [14]u8 = undefined;
-            var header_stream = std.io.fixedBufferStream(&header);
+            var header_writer = Writer.fixed(&header);
 
-            try encodeHeader(header_stream.writer(),
+            try encodeHeader(
+                &header_writer,
                 &FileHeader{
                     .width = rng.int(u16),
                     .height = rng.int(u16),
