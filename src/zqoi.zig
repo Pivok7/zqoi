@@ -93,7 +93,10 @@ pub const Image = struct {
         self.allocator.free(self.pixels);
     }
 
-    pub fn fromMemory(allocator: Allocator, data: []const u8) !Self {
+    pub fn fromMemory(
+        allocator: Allocator,
+        data: []const u8
+    ) (DecodeError || Allocator.Error)!Self {
         var image: Image = undefined;
         image.allocator = allocator;
 
@@ -128,7 +131,9 @@ pub const Image = struct {
 
         var encoded_data_aw = try Writer.Allocating.initCapacity(
             self.allocator,
-            self.pixels.len * (self.format.toChannels() + 1) + @sizeOf(FileHeader) + QoiStreamEnd.len,
+            self.pixels.len *
+                (self.format.toChannels() + 1) +
+                @sizeOf(FileHeader) + QoiStreamEnd.len,
         );
 
         try self.toMemory(&encoded_data_aw.writer);
@@ -139,7 +144,10 @@ pub const Image = struct {
         _ = try file.writeAll(encoded_data);
     }
 
-    pub fn toMemory(self: *const Self, writer: *Writer) !void {
+    pub fn toMemory(
+        self: *const Self,
+        writer: *Writer
+    ) (EncodeError || Writer.Error)!void {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
 
         const header = FileHeader{
@@ -209,17 +217,19 @@ inline fn pixelHash(pixel: Rgba) u8 {
 }
 
 inline fn checkLuma(diff: Rgba) bool {
-    if ((diff.g +% 32) >= 64) return false;
-    if ((diff.r -% diff.g +% 8) >= 16) return false;
-    if ((diff.b -% diff.g +% 8) >= 16) return false;
-    return true;
+    return (
+        ((diff.g +% 32) < 64) and
+        ((diff.r -% diff.g +% 8) < 16) and
+        ((diff.b -% diff.g +% 8) < 16)
+    );
 }
 
 inline fn checkDiff(diff: Rgba) bool {
-    if ((diff.r +% 2) >= 4) return false;
-    if ((diff.g +% 2) >= 4) return false;
-    if ((diff.b +% 2) >= 4) return false;
-    return true;
+    return (
+        ((diff.r +% 2) < 4) and
+        ((diff.g +% 2) < 4) and
+        ((diff.b +% 2) < 4)
+    );
 }
 
 inline fn colorDiff(a: Rgba, b: Rgba) Rgba {
@@ -231,7 +241,10 @@ inline fn colorDiff(a: Rgba, b: Rgba) Rgba {
     };
 }
 
-fn encodeHeader(writer: *Writer, header: *const FileHeader) !void {
+fn encodeHeader(
+    writer: *Writer,
+    header: *const FileHeader
+) Writer.Error!void {
     try writer.writeAll(header.magic);
     try writer.writeInt(u32, header.width, .big);
     try writer.writeInt(u32, header.height, .big);
@@ -239,7 +252,10 @@ fn encodeHeader(writer: *Writer, header: *const FileHeader) !void {
     try writer.writeByte(@intFromEnum(header.colorspace));
 }
 
-fn encodeData(writer: *Writer, data: []Rgba) !void {
+fn encodeData(
+    writer: *Writer,
+    data: []Rgba
+) (EncodeError || Writer.Error)!void {
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
@@ -291,8 +307,10 @@ fn encodeData(writer: *Writer, data: []Rgba) !void {
             const color_diff = colorDiff(previous_pixel, current_pixel);
             if (checkDiff(color_diff)) {
                 try writer.writeByte(
-                    QoiOp.Diff + (0b01_0000 * (color_diff.r +% 2)) +
-                    (0b0100 * (color_diff.g +% 2)) + (0b01 * (color_diff.b +% 2))
+                    QoiOp.Diff +
+                        (0b01_0000 * (color_diff.r +% 2)) +
+                        (0b0100 * (color_diff.g +% 2)) +
+                        (0b01 * (color_diff.b +% 2))
                 );
 
                 break :blk;
@@ -303,7 +321,9 @@ fn encodeData(writer: *Writer, data: []Rgba) !void {
                 @branchHint(.likely);
                 try writer.writeAll(&[_]u8{
                     QoiOp.Luma + (color_diff.g +% 32),
-                    0b01_0000 * (color_diff.r -% color_diff.g +% 8) + (color_diff.b -% color_diff.g +% 8),
+                    0b01_0000 *
+                        (color_diff.r -% color_diff.g +% 8) +
+                        (color_diff.b -% color_diff.g +% 8),
                 });
 
                 break :blk;
@@ -332,8 +352,12 @@ fn decodeHeader(data: []const u8) DecodeError!FileHeader {
     if (data.len <= 14 + QoiStreamEnd.len) return DecodeError.FileTooShort;
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.NotQoi;
-    if (std.mem.readInt(u32, data[4..8], .big) == 0) return DecodeError.InvalidWidth;
-    if (std.mem.readInt(u32, data[8..12], .big) == 0) return DecodeError.InvalidHeight;
+    if (std.mem.readInt(u32, data[4..8], .big) == 0) {
+        return DecodeError.InvalidWidth;
+    }
+    if (std.mem.readInt(u32, data[8..12], .big) == 0) {
+        return DecodeError.InvalidHeight;
+    }
     if (data[12] < 3 or data[12] > 4) return DecodeError.InvalidChannels;
     if (data[13] > 1) return DecodeError.InvalidColorspace;
 
@@ -346,7 +370,11 @@ fn decodeHeader(data: []const u8) DecodeError!FileHeader {
     };
 }
 
-fn decodeData(header: FileHeader, pixels: []Rgba, reader: *FastReader) DecodeError!void {
+fn decodeData(
+    header: FileHeader,
+    pixels: []Rgba,
+    reader: *FastReader
+) DecodeError!void {
     const channel_mask: u8 = if (header.channels == 3) 0xff else 0x00;
 
     var lookup_array: [64]Rgba = undefined;
