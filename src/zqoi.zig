@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const Writer = std.io.Writer;
+const Writer = std.Io.Writer;
 
 const QoiOp = struct {
     pub const Rgb = 0b1111_1110;
