@@ -70,6 +70,8 @@ pub fn main() !void {
 
 ## Speed
 
+Zqoi vs reference c implementation https://github.com/phoboslab/qoi
+
 Benchmarks performed on the images from https://qoiformat.org/benchmark/
 
 Allocator used: raw_c_allocator
