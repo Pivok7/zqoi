@@ -82,14 +82,13 @@ pub const ImageFormat = enum(u8) {
 pub const Image = struct {
     const Self = @This();
 
-    allocator: Allocator,
     width: u32,
     height: u32,
     pixels: []Rgba,
     format: ImageFormat,
 
-    pub fn deinit(self: *const Self) void {
-        self.allocator.free(self.pixels);
+    pub fn deinit(self: *const Self, allocator: Allocator) void {
+        allocator.free(self.pixels);
     }
 
     pub fn fromMemory(
@@ -97,7 +96,6 @@ pub const Image = struct {
         data: []const u8
     ) (DecodeError || Allocator.Error)!Self {
         var image: Image = undefined;
-        image.allocator = allocator;
 
         const header = try decodeHeader(data);
         image.width = header.width;
@@ -123,13 +121,17 @@ pub const Image = struct {
         return try Image.fromMemory(allocator, file_data);
     }
 
-    pub fn toFilePath(self: *const @This(), file_path: []const u8) !void {
+    pub fn toFilePath(
+        self: *const @This(),
+        allocator: Allocator,
+        file_path: []const u8
+    ) !void {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
         const file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
 
         var encoded_data_aw = try Writer.Allocating.initCapacity(
-            self.allocator,
+            allocator,
             self.pixels.len *
                 (self.format.toChannels() + 1) +
                 @sizeOf(FileHeader) + QoiStreamEnd.len,
@@ -138,7 +140,7 @@ pub const Image = struct {
         try self.toMemory(&encoded_data_aw.writer);
 
         const encoded_data = try encoded_data_aw.toOwnedSlice();
-        defer self.allocator.free(encoded_data);
+        defer allocator.free(encoded_data);
 
         _ = try file.writeAll(encoded_data);
     }
@@ -500,7 +502,6 @@ test "simple_encode" {
     const allocator = std.testing.allocator;
 
     var image = Image{
-        .allocator = allocator,
         .width = 1024,
         .height = 1024,
         .pixels = undefined,
@@ -521,7 +522,7 @@ test "simple_encode" {
 
     var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
     touch.close();
-    try image.toFilePath("tests_output/simple.qoi");
+    try image.toFilePath(allocator, "tests_output/simple.qoi");
 }
 
 test "noise" {
@@ -535,7 +536,6 @@ test "noise" {
     const rand = prng.random();
 
     var image = Image{
-        .allocator = allocator,
         .width = 1024,
         .height = 1024,
         .pixels = undefined,
@@ -556,15 +556,15 @@ test "noise" {
 
     var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
     touch.close();
-    try image.toFilePath("tests_output/random.qoi");
+    try image.toFilePath(allocator, "tests_output/random.qoi");
 }
 
 test "read_write" {
     const allocator = std.testing.allocator;
 
     var img = try Image.fromFilePath(allocator, "tests_output/random.qoi");
-    try img.toFilePath("tests_output/copy_random.qoi");
-    img.deinit();
+    try img.toFilePath(allocator, "tests_output/copy_random.qoi");
+    img.deinit(allocator);
 
     const file_1_path = "tests_output/random.qoi";
     const file_2_path = "tests_output/copy_random.qoi";
@@ -581,8 +581,8 @@ test "read_write" {
     allocator.free(file_2_data);
 
     img = try Image.fromFilePath(allocator, "tests_output/simple.qoi");
-    try img.toFilePath("tests_output/copy_simple.qoi");
-    img.deinit();
+    try img.toFilePath(allocator, "tests_output/copy_simple.qoi");
+    img.deinit(allocator);
 
     file_1_data = try readFileAlloc(allocator, file_1_path);
     file_2_data = try readFileAlloc(allocator, file_2_path);
@@ -627,7 +627,7 @@ test "input fuzzer" {
 
         var image_or_err = Image.fromMemory(allocator, &input_buffer);
         if (image_or_err) |*image| {
-            defer image.deinit();
+            defer image.deinit(allocator);
         } else |err| {
             // error is also okay, just no crashes plz
             err catch {};

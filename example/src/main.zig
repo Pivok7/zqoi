@@ -9,15 +9,14 @@ pub fn main() !void {
     // Load and save file
     {
         var img = try zqoi.Image.fromFilePath(allocator, "image.qoi");
-        defer img.deinit();
+        defer img.deinit(allocator);
 
-        try img.toFilePath("copy.qoi");
+        try img.toFilePath(allocator, "copy.qoi");
     }
 
     // Manually create image
     {
         var img = zqoi.Image{
-            .allocator = allocator,
             .width = 1024,
             .height = 1024,
             .pixels = undefined,
@@ -36,6 +35,6 @@ pub fn main() !void {
             };
         }
 
-        try img.toFilePath("generated.qoi");
+        try img.toFilePath(allocator, "generated.qoi");
     }
 }

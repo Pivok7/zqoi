@@ -6,7 +6,7 @@ QOI decoder/encoder written in pure Zig with speed comparable to the reference i
 
 You will need:
 
-* Zig compiler 0.15.1
+* Zig compiler 0.15.2
 
 Fetch:
 ```bash
@@ -36,15 +36,14 @@ pub fn main() !void {
     // Load and save file
     {
         var img = try zqoi.Image.fromFilePath(allocator, "image.qoi");
-        defer img.deinit();
+        defer img.deinit(allocator);
 
-        try img.toFilePath("copy.qoi");
+        try img.toFilePath(allocator, "copy.qoi");
     }
 
     // Manually create image
     {
         var img = zqoi.Image{
-            .allocator = allocator,
             .width = 1024,
             .height = 1024,
             .pixels = undefined,
@@ -63,7 +62,7 @@ pub fn main() !void {
             };
         }
 
-        try img.toFilePath("generated.qoi");
+        try img.toFilePath(allocator, "generated.qoi");
     }
 }
 ```
