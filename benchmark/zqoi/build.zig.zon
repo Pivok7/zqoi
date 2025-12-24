@@ -1,7 +1,7 @@
 .{
-    .name = .example,
+    .name = .zqoi_bench,
     .version = "0.1.0",
-    .fingerprint = 0x6eec9b9faca4b9f0, // Changing this has security and trust implications.
+    .fingerprint = 0xaffebf8abda94021, // Changing this has security and trust implications.
 
     .dependencies = .{
         .zqoi = .{ .path = "../../" },
