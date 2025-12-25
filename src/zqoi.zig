@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Writer = std.Io.Writer;
 
 const QoiOp = struct {
     pub const Rgb = 0b1111_1110;
@@ -87,10 +86,6 @@ pub const Image = struct {
     pixels: []Rgba,
     format: ImageFormat,
 
-    pub fn deinit(self: *const Self, allocator: Allocator) void {
-        allocator.free(self.pixels);
-    }
-
     pub fn fromMemory(
         allocator: Allocator,
         data: []const u8
@@ -130,7 +125,7 @@ pub const Image = struct {
         const file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
 
-        var encoded_data_aw = try Writer.Allocating.initCapacity(
+        var encoded_data_aw = try std.Io.Writer.Allocating.initCapacity(
             allocator,
             self.pixels.len *
                 (self.format.toChannels() + 1) +
@@ -147,8 +142,8 @@ pub const Image = struct {
 
     pub fn toMemory(
         self: *const Self,
-        writer: *Writer
-    ) (EncodeError || Writer.Error)!void {
+        writer: *std.Io.Writer
+    ) (EncodeError || std.Io.Writer.Error)!void {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
 
         const header = FileHeader{
@@ -165,8 +160,16 @@ pub const Image = struct {
         _ = try writer.writeAll(&QoiStreamEnd);
     }
 
+    pub fn asBytes(self: *const Self) []const u8 {
+        return std.mem.sliceAsBytes(self.pixels);
+    }
+
     pub fn isValidSize(self: *const Self) bool {
         return (self.width * self.height == self.pixels.len);
+    }
+
+    pub fn deinit(self: *const Self, allocator: Allocator) void {
+        allocator.free(self.pixels);
     }
 };
 
@@ -242,10 +245,10 @@ inline fn colorDiff(a: Rgba, b: Rgba) Rgba {
     };
 }
 
-fn encodeHeader(
-    writer: *Writer,
+pub fn encodeHeader(
+    writer: *std.Io.Writer,
     header: *const FileHeader
-) Writer.Error!void {
+) std.Io.Writer.Error!void {
     try writer.writeAll(header.magic);
     try writer.writeInt(u32, header.width, .big);
     try writer.writeInt(u32, header.height, .big);
@@ -253,10 +256,10 @@ fn encodeHeader(
     try writer.writeByte(@intFromEnum(header.colorspace));
 }
 
-fn encodeData(
-    writer: *Writer,
+pub fn encodeData(
+    writer: *std.Io.Writer,
     data: []Rgba
-) (EncodeError || Writer.Error)!void {
+) (EncodeError || std.Io.Writer.Error)!void {
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
@@ -490,147 +493,14 @@ fn readFileAlloc(allocator: Allocator, path: []const u8) ![]const u8 {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const file_fs_reader_buf = try allocator.alloc(u8, try file.getEndPos());
-    var file_fs_reader = file.reader(file_fs_reader_buf);
+    const buf = try allocator.alloc(u8, try file.getEndPos());
+    var file_fs_reader = file.reader(buf);
     const file_reader = &file_fs_reader.interface;
 
-    _ = try file_reader.take(file_fs_reader_buf.len);
-    return file_fs_reader_buf;
+    _ = try file_reader.take(buf.len);
+    return buf;
 }
 
-test "simple_encode" {
-    const allocator = std.testing.allocator;
-
-    var image = Image{
-        .width = 1024,
-        .height = 1024,
-        .pixels = undefined,
-        .format = .r8g8b8a8_srgb,
-    };
-
-    image.pixels = try allocator.alloc(Rgba, image.width * image.height);
-    defer allocator.free(image.pixels);
-
-    for (image.pixels, 0..) |*pixel, i| {
-        pixel.* = Rgba{
-            .r = @as(u8, @intCast(i % 256)),
-            .g = @as(u8, @intCast(i % 128)),
-            .b = @as(u8, @intCast(i % 64)),
-            .a = 255,
-        };
-    }
-
-    var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
-    touch.close();
-    try image.toFilePath(allocator, "tests_output/simple.qoi");
-}
-
-test "noise" {
-    const allocator = std.testing.allocator;
-
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
-    const rand = prng.random();
-
-    var image = Image{
-        .width = 1024,
-        .height = 1024,
-        .pixels = undefined,
-        .format = .r8g8b8a8_srgb,
-    };
-
-    image.pixels = try allocator.alloc(Rgba, image.width * image.height);
-    defer allocator.free(image.pixels);
-
-    for (image.pixels) |*pixel| {
-        pixel.* = Rgba{
-            .r = rand.int(u8),
-            .g = rand.int(u8),
-            .b = rand.int(u8),
-            .a = rand.int(u8),
-        };
-    }
-
-    var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
-    touch.close();
-    try image.toFilePath(allocator, "tests_output/random.qoi");
-}
-
-test "read_write" {
-    const allocator = std.testing.allocator;
-
-    var img = try Image.fromFilePath(allocator, "tests_output/random.qoi");
-    try img.toFilePath(allocator, "tests_output/copy_random.qoi");
-    img.deinit(allocator);
-
-    const file_1_path = "tests_output/random.qoi";
-    const file_2_path = "tests_output/copy_random.qoi";
-
-    var file_1_data = try readFileAlloc(allocator, file_1_path);
-    var file_2_data = try readFileAlloc(allocator, file_2_path);
-
-    if (!std.mem.eql(u8, file_1_data, file_2_data)) {
-        std.log.err("random.qoi: input != output!", .{});
-        return error.CorruptedOutput;
-    }
-
-    allocator.free(file_1_data);
-    allocator.free(file_2_data);
-
-    img = try Image.fromFilePath(allocator, "tests_output/simple.qoi");
-    try img.toFilePath(allocator, "tests_output/copy_simple.qoi");
-    img.deinit(allocator);
-
-    file_1_data = try readFileAlloc(allocator, file_1_path);
-    file_2_data = try readFileAlloc(allocator, file_2_path);
-
-    if (!std.mem.eql(u8, file_1_data, file_2_data)) {
-        std.log.err("simple.qoi: input != output!", .{});
-        return error.CorruptedOutput;
-    }
-
-    allocator.free(file_1_data);
-    allocator.free(file_2_data);
-}
-
-// Fuzzer taken from https://github.com/ikskuh/zig-qoi
-test "input fuzzer" {
-    const allocator = std.testing.allocator;
-
-    var rng_engine = std.Random.DefaultPrng.init(0x1337);
-    const rng = rng_engine.random();
-
-    var rounds: usize = 32;
-    while (rounds > 0) {
-        rounds -= 1;
-        var input_buffer: [1 << 20]u8 = undefined; // perform on a 1 MB buffer
-        rng.bytes(&input_buffer);
-
-        if ((rounds % 4) != 0) { // 25% is fully random 75% has a correct looking header
-            var header: [14]u8 = undefined;
-            var header_writer = Writer.fixed(&header);
-
-            try encodeHeader(
-                &header_writer,
-                &FileHeader{
-                    .width = rng.int(u16),
-                    .height = rng.int(u16),
-                    .channels = rng.int(u8) % 2 + 3,
-                    .colorspace = @enumFromInt(rng.int(u8) % 2),
-                }
-            );
-            @memcpy(input_buffer[0..header.len], &header);
-        }
-
-        var image_or_err = Image.fromMemory(allocator, &input_buffer);
-        if (image_or_err) |*image| {
-            defer image.deinit(allocator);
-        } else |err| {
-            // error is also okay, just no crashes plz
-            err catch {};
-        }
-    }
+test {
+    _ = @import("tests.zig");
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zqoi = @import("zqoi");
 const zstbi = @import("zstbi");
+const cmd = @import("cmd.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -15,16 +16,10 @@ const EncDecTime = struct {
     decode: i128,
 };
 
-const BenchmarkOptions = struct {
+pub const BenchmarkOptions = struct {
     runs: usize = 10,
     print_individual: bool = false,
     warmup: usize = 3,
-};
-
-const CmdArgsState = enum {
-    none,
-    runs,
-    warmup,
 };
 
 var stdout: *std.Io.Writer = undefined;
@@ -33,6 +28,16 @@ fn printTime(nano: i128) !void {
     const fnano = @as(f64, @floatFromInt(nano));
 
     try stdout.print("{d:.2}ms", .{fnano / std.time.ns_per_ms});
+}
+
+fn printEncDec(enc: i128, dec: i128) !void {
+    try stdout.print("encode: ", .{});
+    try printTime(enc);
+    try stdout.print("\n", .{});
+
+    try stdout.print("decode: ", .{});
+    try printTime(dec);
+    try stdout.print("\n", .{});
 }
 
 fn testDecode(
@@ -130,8 +135,8 @@ fn benchmarkDir(
     path: [:0]const u8,
     options: BenchmarkOptions,
 ) !struct{ time: EncDecTime, timages: usize  } {
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-
+    var total_time: EncDecTime = .{ .encode = 0, .decode = 0 };
+    var total_images: usize = 0;
     var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch {
         return .{
             .time = try benchFile(allocator, path, options),
@@ -140,10 +145,8 @@ fn benchmarkDir(
     };
     defer dir.close();
 
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
     var dir_iterator = dir.iterate();
-
-    var total_time: EncDecTime = .{ .encode = 0, .decode = 0 };
-    var total_images: usize = 0;
 
     while (try dir_iterator.next()) |d| : (total_images += 1) {
         const name = d.name;
@@ -161,47 +164,20 @@ fn benchmarkDir(
 
         if (options.print_individual) {
             try stdout.print("{s}\n", .{new_path});
-
-            try stdout.print("encode: ", .{});
-            try printTime(res.time.encode);
-            try stdout.print("\n", .{});
-
-            try stdout.print("decode: ", .{});
-            try printTime(res.time.decode);
-            try stdout.print("\n", .{});
-
+            try printEncDec(res.time.encode, res.time.decode);
             try stdout.flush();
         }
     }
 
     try stdout.print("{s}\n", .{path});
-
-    try stdout.print("encode: ", .{});
-    try printTime(@divTrunc(total_time.encode, total_images));
-    try stdout.print("\n", .{});
-
-    try stdout.print("decode: ", .{});
-    try printTime(@divTrunc(total_time.decode, total_images));
-    try stdout.print("\n", .{});
-
+    try printEncDec(
+        @divTrunc(total_time.encode, total_images),
+        @divTrunc(total_time.decode, total_images),
+    );
     try stdout.flush();
 
     return .{ .time = total_time, .timages = total_images };
 }
-
-fn printHelp() void {
-    std.debug.print(">>> Help <<<\n", .{});
-    std.debug.print("Usage: zqoi-bench <directory> <options>\n", .{});
-    std.debug.print("    --help             - display this menu\n", .{});
-    std.debug.print("    --runs <number>    - number of runs per image (default 10)\n", .{});
-    std.debug.print("    --warmup <number>  - number of warmup runs (default 3)\n", .{});
-    std.debug.print("    --printindiv       - print times for individual images\n", .{});
-    std.debug.print("Examples:\n", .{});
-    std.debug.print("    zqoi-bench benchmark-dir\n", .{});
-    std.debug.print("    zqoi-bench benchmark-dir/pngimg --runs 5 --warmup 0\n", .{});
-}
-
-
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -222,7 +198,7 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len <= 1) {
-        printHelp();
+        cmd.printHelp();
         return;
     }
 
@@ -235,82 +211,7 @@ pub fn main() !void {
     };
     dir.close();
 
-    // Args processing
-    var options: BenchmarkOptions = .{};
-    var cmd_state: CmdArgsState = .none;
-
-    for (args[2..]) |arg| {
-        const eql = std.mem.eql;
-
-        if (cmd_state != .none) {
-            switch (cmd_state) {
-                .runs => {
-                    const val = std.fmt.parseInt(
-                        isize,
-                        arg,
-                        10,
-                    ) catch |err| {
-                        std.log.err("Invalid --runs value: \"{s}\"", .{arg});
-                        return err;
-                    };
-
-                    if (val <= 0) {
-                        std.log.err("Value for --runs must be greater than 0\nProvided: \"{s}\"", .{arg});
-                        std.process.exit(1);
-                    }
-
-                    options.runs = @intCast(val);
-                },
-                .warmup => {
-                    const val = std.fmt.parseInt(
-                        isize,
-                        arg,
-                        10,
-                    ) catch |err| {
-                        std.log.err("Invalid --warmup value: \"{s}\"", .{arg});
-                        return err;
-                    };
-
-                    if (val < 0) {
-                        std.log.err("Value for --warmup must be positive\nProvided: \"{s}\"", .{arg});
-                        std.process.exit(1);
-                    }
-
-                    options.warmup = @intCast(val);
-                },
-                else => unreachable,
-            }
-            cmd_state = .none;
-            continue;
-        }
-
-        if (eql(u8, arg, "--help")) {
-            printHelp();
-            return;
-        } else if (eql(u8, arg, "--warmup")) {
-            cmd_state = .warmup;
-        } else if (eql(u8, arg, "--printindiv")) {
-            options.print_individual = true;
-        } else if (eql(u8, arg, "--runs")) {
-            cmd_state = .runs;
-        } else {
-            std.log.err("Invalid argument \"{s}\"", .{arg});
-            std.process.exit(1);
-        }
-    }
-
-    if (cmd_state != .none) {
-        switch (cmd_state) {
-            .runs => {
-                std.log.err("No value for --runs provided", .{});
-            },
-            .warmup => {
-                std.log.err("No value for --warmup provided", .{});
-            },
-            .none => {},
-        }
-        std.process.exit(1);
-    }
+    const options = try cmd.porcessArgs(args[2..]);
 
     _ = try benchmarkDir(allocator, bench_dir_path, options);
 }
