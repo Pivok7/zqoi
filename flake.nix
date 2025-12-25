@@ -21,6 +21,10 @@
       {
         devShells.default = pkgs.mkShell rec {
           buildInputs = with pkgs; [
+            zig
+            git
+            wget
+            gnutar
             libpng
           ];
 
