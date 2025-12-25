@@ -6,7 +6,7 @@ Reference benchmark:
 ```
 cd qoi-reference
 make
-./qoibench ../qoi-benchmark-suite --nopng --onlytotals
+./qoibench 10 ../qoi-benchmark-suite --nopng --onlytotals
 ```
 Zig benchmark:
 ```
