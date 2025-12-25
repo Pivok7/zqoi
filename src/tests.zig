@@ -124,7 +124,7 @@ test "interfaces" {
         const buf = try allocator.alloc(u8, img_size);
         defer allocator.free(buf);
 
-        const img_out_buf = try img.toBuf(buf);
+        const img_out_buf = try img.toBuffer(buf);
 
         var writer_alloc = std.Io.Writer.Allocating.init(allocator);
         defer writer_alloc.deinit();
@@ -168,7 +168,7 @@ test "input_fuzzer" {
             @memcpy(input_buffer[0..header.len], &header);
         }
 
-        var image_or_err = Image.fromBuf(allocator, &input_buffer);
+        var image_or_err = Image.fromBuffer(allocator, &input_buffer);
         if (image_or_err) |*image| {
             defer image.deinit(allocator);
         } else |err| {

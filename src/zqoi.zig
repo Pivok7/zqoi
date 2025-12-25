@@ -86,7 +86,7 @@ pub const Image = struct {
     pixels: []Rgba,
     format: ImageFormat,
 
-    pub fn fromBuf(
+    pub fn fromBuffer(
         allocator: Allocator,
         data: []const u8
     ) (DecodeError || Allocator.Error)!Self {
@@ -106,17 +106,17 @@ pub const Image = struct {
 
     pub fn fromReader(allocator: Allocator, reader: *std.Io.Reader) !Self {
         const buf = try reader.allocRemaining(allocator, .unlimited);
-        return try fromBuf(allocator, buf);
+        return try fromBuffer(allocator, buf);
     }
 
     pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
         const file_data = try readFileAlloc(allocator, path);
         defer allocator.free(file_data);
 
-        return try fromBuf(allocator, file_data);
+        return try fromBuffer(allocator, file_data);
     }
 
-    pub fn toBuf(
+    pub fn toBuffer(
         self: *const Self,
         buf: []u8,
     ) (EncodeError || std.Io.Writer.Error)![]u8 {

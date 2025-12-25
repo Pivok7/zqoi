@@ -51,7 +51,7 @@ fn testDecode(
         //START
         const start_time = std.time.nanoTimestamp();
 
-        const image = try zqoi.Image.fromBuf(allocator, pixels);
+        const image = try zqoi.Image.fromBuffer(allocator, pixels);
 
         const end_time = std.time.nanoTimestamp();
         //END
