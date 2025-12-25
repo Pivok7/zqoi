@@ -72,7 +72,7 @@ fn testEncode(
     image: zqoi.Image,
     options: BenchmarkOptions,
 ) !struct{time: i128, pixels: []const u8} {
-    const buf = try allocator.alloc(u8, image.width * image.height * 4);
+    const buf = try allocator.alloc(u8, image.width * image.height * 5);
     var writer = std.Io.Writer.fixed(buf);
 
     var duration: i128 = 0;
