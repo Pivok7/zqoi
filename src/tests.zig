@@ -146,7 +146,7 @@ test "input_fuzzer" {
     var rng_engine = std.Random.DefaultPrng.init(0x1337);
     const rng = rng_engine.random();
 
-    var rounds: usize = 2;
+    var rounds: usize = 32;
     while (rounds > 0) {
         rounds -= 1;
         var input_buffer: [1 << 20]u8 = undefined; // perform on a 1 MB buffer

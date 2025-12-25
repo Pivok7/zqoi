@@ -38,7 +38,7 @@ pub fn main() !void {
         var img = try zqoi.Image.fromFilePath(allocator, "image.qoi");
         defer img.deinit(allocator);
 
-        try img.toFilePath(allocator, "copy.qoi");
+        try img.toFilePath("copy.qoi");
     }
 
     // Manually create image
@@ -62,7 +62,7 @@ pub fn main() !void {
             };
         }
 
-        try img.toFilePath(allocator, "generated.qoi");
+        try img.toFilePath("generated.qoi");
     }
 }
 ```

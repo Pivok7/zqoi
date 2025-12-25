@@ -30,10 +30,6 @@ pub const DecodeError = error {
     LeftoverData,
 };
 
-const DecodeErrorSet = (
-    DecodeError || std.Io.Reader.Error || Allocator.Error
-);
-
 pub const Rgba = extern struct {
     r: u8,
     g: u8,
@@ -93,7 +89,7 @@ pub const Image = struct {
     pub fn fromBuf(
         allocator: Allocator,
         data: []const u8
-    ) DecodeErrorSet!Self {
+    ) (DecodeError || Allocator.Error)!Self {
         var image: Image = undefined;
 
         const header = try decodeHeader(data);
@@ -104,25 +100,13 @@ pub const Image = struct {
         image.pixels = try allocator.alloc(Rgba, header.width * header.height);
         errdefer allocator.free(image.pixels);
 
-        var reader = std.Io.Reader.fixed(data[14..]);
-
-        try decodeData(header, image.pixels, &reader);
+        try decodeData(header, image.pixels, data[14..]);
         return image;
     }
 
-    pub fn fromReader(allocator: Allocator, reader: *std.Io.Reader) DecodeErrorSet!Self {
-        var image: Image = undefined;
-
-        const header = try decodeHeader(reader.takeArray(14));
-        image.width = header.width;
-        image.height = header.height;
-        image.format = ImageFormat.new(header.colorspace, header.channels);
-
-        image.pixels = try allocator.alloc(Rgba, header.width * header.height);
-        errdefer allocator.free(image.pixels);
-
-        try decodeData(header, image.pixels, reader);
-        return image;
+    pub fn fromReader(allocator: Allocator, reader: *std.Io.Reader) !Self {
+        const buf = try reader.allocRemaining(allocator, .unlimited);
+        return try fromBuf(allocator, buf);
     }
 
     pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
@@ -379,6 +363,7 @@ pub fn encodeData(
 }
 
 pub fn decodeHeader(data: []const u8) DecodeError!FileHeader {
+    // File must be larger than 'header'
     if (data.len <= 14) return DecodeError.FileTooShort;
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.NotQoi;
@@ -403,8 +388,13 @@ pub fn decodeHeader(data: []const u8) DecodeError!FileHeader {
 pub fn decodeData(
     header: FileHeader,
     buf: []Rgba,
-    reader: *std.Io.Reader,
-) (DecodeError || std.Io.Reader.Error)!void {
+    data: []const u8,
+) DecodeError!void {
+    // We create reader from the fragment containing only the pixel info
+    var reader = FastReader{
+        .data = data,
+    };
+
     const channel_mask: u8 = if (header.channels == 3) 0xff else 0x00;
 
     var lookup_array: [64]Rgba = undefined;
@@ -418,24 +408,68 @@ pub fn decodeData(
     for (buf) |*b| {
         if (current_run > 0) {
             current_run -= 1;
-        } else {
-            @branchHint(.cold);
-            const b1: u8 = try reader.takeByte();
+        }
+        // We only check array bounds if we are close to the array length
+        // Unsafe version
+        else if (reader.pos < reader.data.len - 4) {
+            const b1: u8 = reader.readUnsafe();
 
             // QOI_OP_RGB
             if (b1 == QoiOp.Rgb) {
-                const bytes = try reader.take(3);
-                current_pixel.r = bytes[0];
-                current_pixel.g = bytes[1];
-                current_pixel.b = bytes[2];
+                current_pixel.r = reader.readUnsafe();
+                current_pixel.g = reader.readUnsafe();
+                current_pixel.b = reader.readUnsafe();
             }
             // QOI_OP_RGBA
             else if (b1 == QoiOp.Rgba) {
-                const bytes = try reader.take(4);
-                current_pixel.r = bytes[0];
-                current_pixel.g = bytes[1];
-                current_pixel.b = bytes[2];
-                current_pixel.a = bytes[3] & channel_mask;
+                current_pixel.r = reader.readUnsafe();
+                current_pixel.g = reader.readUnsafe();
+                current_pixel.b = reader.readUnsafe();
+                current_pixel.a = reader.readUnsafe() | channel_mask;
+            }
+            // QOI_OP_INDEX
+            else if ((b1 & mask2) == QoiOp.Index) {
+                @branchHint(.likely);
+                current_pixel = lookup_array[b1];
+            }
+            // QOI_OP_DIFF
+            else if ((b1 & mask2) == QoiOp.Diff) {
+                current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
+                current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
+                current_pixel.b +%= ( b1       & 0x03) -% 2;
+            }
+            // QOI_OP_LUMA
+            else if ((b1 & mask2) == QoiOp.Luma) {
+                @branchHint(.likely);
+                const b2: u8 = reader.readUnsafe();
+                const vg: u8 = (b1 & 0x3f) -% 32;
+                current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
+                current_pixel.g +%= vg;
+                current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
+            }
+            // QOI_OP_RUN
+            else if ((b1 & mask2) == QoiOp.Run) {
+                current_run = (b1 & 0x3f);
+            }
+
+            lookup_array[pixelHash(current_pixel)] = current_pixel;
+        // Safe version
+        } else {
+            @branchHint(.cold);
+            const b1: u8 = try reader.readSafe();
+
+            // QOI_OP_RGB
+            if (b1 == QoiOp.Rgb) {
+                current_pixel.r = try reader.readSafe();
+                current_pixel.g = try reader.readSafe();
+                current_pixel.b = try reader.readSafe();
+            }
+            // QOI_OP_RGBA
+            else if (b1 == QoiOp.Rgba) {
+                current_pixel.r = try reader.readSafe();
+                current_pixel.g = try reader.readSafe();
+                current_pixel.b = try reader.readSafe();
+                current_pixel.a = try reader.readSafe() | channel_mask;
             }
             // QOI_OP_INDEX
             else if ((b1 & mask2) == QoiOp.Index) {
@@ -449,7 +483,7 @@ pub fn decodeData(
             }
             // QOI_OP_LUMA
             else if ((b1 & mask2) == QoiOp.Luma) {
-                const b2: u8 = try reader.takeByte();
+                const b2: u8 = try reader.readSafe();
                 const vg: u8 = (b1 & 0x3f) -% 32;
                 current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
                 current_pixel.g +%= vg;
@@ -467,7 +501,7 @@ pub fn decodeData(
     }
 
     // Ignore last 8 bytes marking the end
-    if (reader.seek + 8 < reader.end) {
+    if (reader.pos + 8 < reader.data.len) {
         return DecodeError.LeftoverData;
     }
 }
