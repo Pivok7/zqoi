@@ -30,6 +30,10 @@ pub const DecodeError = error {
     LeftoverData,
 };
 
+const DecodeErrorSet = (
+    DecodeError || std.Io.Reader.Error || Allocator.Error
+);
+
 pub const Rgba = extern struct {
     r: u8,
     g: u8,
@@ -86,10 +90,10 @@ pub const Image = struct {
     pixels: []Rgba,
     format: ImageFormat,
 
-    pub fn fromMemory(
+    pub fn fromBuf(
         allocator: Allocator,
         data: []const u8
-    ) (DecodeError || Allocator.Error)!Self {
+    ) DecodeErrorSet!Self {
         var image: Image = undefined;
 
         const header = try decodeHeader(data);
@@ -100,12 +104,24 @@ pub const Image = struct {
         image.pixels = try allocator.alloc(Rgba, header.width * header.height);
         errdefer allocator.free(image.pixels);
 
-        // We create reader from the fragment containing only the pixel info
-        var pixel_reader = FastReader{
-            .data = data[14..(data.len - 8)],
-        };
+        var reader = std.Io.Reader.fixed(data[14..]);
 
-        try decodeData(header, image.pixels, &pixel_reader);
+        try decodeData(header, image.pixels, &reader);
+        return image;
+    }
+
+    pub fn fromReader(allocator: Allocator, reader: *std.Io.Reader) DecodeErrorSet!Self {
+        var image: Image = undefined;
+
+        const header = try decodeHeader(reader.takeArray(14));
+        image.width = header.width;
+        image.height = header.height;
+        image.format = ImageFormat.new(header.colorspace, header.channels);
+
+        image.pixels = try allocator.alloc(Rgba, header.width * header.height);
+        errdefer allocator.free(image.pixels);
+
+        try decodeData(header, image.pixels, reader);
         return image;
     }
 
@@ -113,37 +129,13 @@ pub const Image = struct {
         const file_data = try readFileAlloc(allocator, path);
         defer allocator.free(file_data);
 
-        return try Image.fromMemory(allocator, file_data);
+        return try fromBuf(allocator, file_data);
     }
 
-    pub fn toFilePath(
-        self: *const @This(),
-        allocator: Allocator,
-        file_path: []const u8
-    ) !void {
-        if (!self.isValidSize()) return EncodeError.InvalidSize;
-        const file = try std.fs.cwd().createFile(file_path, .{});
-        defer file.close();
-
-        var encoded_data_aw = try std.Io.Writer.Allocating.initCapacity(
-            allocator,
-            self.pixels.len *
-                (self.format.toChannels() + 1) +
-                @sizeOf(FileHeader) + QoiStreamEnd.len,
-        );
-
-        try self.toMemory(&encoded_data_aw.writer);
-
-        const encoded_data = try encoded_data_aw.toOwnedSlice();
-        defer allocator.free(encoded_data);
-
-        _ = try file.writeAll(encoded_data);
-    }
-
-    pub fn toMemory(
+    pub fn toBuf(
         self: *const Self,
-        writer: *std.Io.Writer
-    ) (EncodeError || std.Io.Writer.Error)!void {
+        buf: []u8,
+    ) (EncodeError || std.Io.Writer.Error)![]u8 {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
 
         const header = FileHeader{
@@ -155,9 +147,44 @@ pub const Image = struct {
 
         if (!header.isValid()) return EncodeError.CorruptedHeader;
 
+        var writer = std.Io.Writer.fixed(buf);
+        try self.toWriter(&writer);
+
+        return writer.buffered();
+    }
+
+    pub fn toWriter(
+        self: *const Self,
+        writer: *std.Io.Writer,
+    ) !void {
+        if (!self.isValidSize()) return EncodeError.InvalidSize;
+
+        const header = FileHeader{
+            .width = self.width,
+            .height = self.height,
+            .channels = self.format.toChannels(),
+            .colorspace = self.format.toColorspace(),
+        };
+
         try encodeHeader(writer, &header);
         try encodeData(writer, self.pixels);
         _ = try writer.writeAll(&QoiStreamEnd);
+    }
+
+    pub fn toFilePath(
+        self: *const Self,
+        file_path: []const u8
+    ) !void {
+        if (!self.isValidSize()) return EncodeError.InvalidSize;
+        const file = try std.fs.cwd().createFile(file_path, .{});
+        defer file.close();
+
+        var buf: [4096]u8 = undefined;
+        var file_fs_writer = file.writer(&buf);
+        const file_writer = &file_fs_writer.interface;
+
+        try self.toWriter(file_writer);
+        try file_writer.flush();
     }
 
     pub fn asBytes(self: *const Self) []const u8 {
@@ -351,9 +378,8 @@ pub fn encodeData(
     }
 }
 
-fn decodeHeader(data: []const u8) DecodeError!FileHeader {
-    // File must be larger than 'header' + 'stream_end'
-    if (data.len <= 14 + QoiStreamEnd.len) return DecodeError.FileTooShort;
+pub fn decodeHeader(data: []const u8) DecodeError!FileHeader {
+    if (data.len <= 14) return DecodeError.FileTooShort;
 
     if (!std.mem.eql(u8, data[0..4], "qoif")) return DecodeError.NotQoi;
     if (std.mem.readInt(u32, data[4..8], .big) == 0) {
@@ -374,11 +400,11 @@ fn decodeHeader(data: []const u8) DecodeError!FileHeader {
     };
 }
 
-fn decodeData(
+pub fn decodeData(
     header: FileHeader,
-    pixels: []Rgba,
-    reader: *FastReader
-) DecodeError!void {
+    buf: []Rgba,
+    reader: *std.Io.Reader,
+) (DecodeError || std.Io.Reader.Error)!void {
     const channel_mask: u8 = if (header.channels == 3) 0xff else 0x00;
 
     var lookup_array: [64]Rgba = undefined;
@@ -389,71 +415,27 @@ fn decodeData(
 
     const mask2: u8 = 0b1100_0000;
 
-    for (pixels) |*pixel| {
+    for (buf) |*b| {
         if (current_run > 0) {
             current_run -= 1;
-        }
-        // We only check array bounds if we are close to the array length
-        // Unsafe version
-        else if (reader.pos < reader.data.len - 4) {
-            const b1: u8 = reader.readUnsafe();
-
-            // QOI_OP_RGB
-            if (b1 == QoiOp.Rgb) {
-                current_pixel.r = reader.readUnsafe();
-                current_pixel.g = reader.readUnsafe();
-                current_pixel.b = reader.readUnsafe();
-            }
-            // QOI_OP_RGBA
-            else if (b1 == QoiOp.Rgba) {
-                current_pixel.r = reader.readUnsafe();
-                current_pixel.g = reader.readUnsafe();
-                current_pixel.b = reader.readUnsafe();
-                current_pixel.a = reader.readUnsafe() | channel_mask;
-            }
-            // QOI_OP_INDEX
-            else if ((b1 & mask2) == QoiOp.Index) {
-                @branchHint(.likely);
-                current_pixel = lookup_array[b1];
-            }
-            // QOI_OP_DIFF
-            else if ((b1 & mask2) == QoiOp.Diff) {
-                current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
-                current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
-                current_pixel.b +%= ( b1       & 0x03) -% 2;
-            }
-            // QOI_OP_LUMA
-            else if ((b1 & mask2) == QoiOp.Luma) {
-                @branchHint(.likely);
-                const b2: u8 = reader.readUnsafe();
-                const vg: u8 = (b1 & 0x3f) -% 32;
-                current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
-                current_pixel.g +%= vg;
-                current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
-            }
-            // QOI_OP_RUN
-            else if ((b1 & mask2) == QoiOp.Run) {
-                current_run = (b1 & 0x3f);
-            }
-
-            lookup_array[pixelHash(current_pixel)] = current_pixel;
-        // Safe version
         } else {
             @branchHint(.cold);
-            const b1: u8 = try reader.readSafe();
+            const b1: u8 = try reader.takeByte();
 
             // QOI_OP_RGB
             if (b1 == QoiOp.Rgb) {
-                current_pixel.r = try reader.readSafe();
-                current_pixel.g = try reader.readSafe();
-                current_pixel.b = try reader.readSafe();
+                const bytes = try reader.take(3);
+                current_pixel.r = bytes[0];
+                current_pixel.g = bytes[1];
+                current_pixel.b = bytes[2];
             }
             // QOI_OP_RGBA
             else if (b1 == QoiOp.Rgba) {
-                current_pixel.r = try reader.readSafe();
-                current_pixel.g = try reader.readSafe();
-                current_pixel.b = try reader.readSafe();
-                current_pixel.a = try reader.readSafe() | channel_mask;
+                const bytes = try reader.take(4);
+                current_pixel.r = bytes[0];
+                current_pixel.g = bytes[1];
+                current_pixel.b = bytes[2];
+                current_pixel.a = bytes[3] & channel_mask;
             }
             // QOI_OP_INDEX
             else if ((b1 & mask2) == QoiOp.Index) {
@@ -467,7 +449,7 @@ fn decodeData(
             }
             // QOI_OP_LUMA
             else if ((b1 & mask2) == QoiOp.Luma) {
-                const b2: u8 = try reader.readSafe();
+                const b2: u8 = try reader.takeByte();
                 const vg: u8 = (b1 & 0x3f) -% 32;
                 current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
                 current_pixel.g +%= vg;
@@ -481,10 +463,11 @@ fn decodeData(
             lookup_array[pixelHash(current_pixel)] = current_pixel;
         }
 
-        pixel.* = current_pixel;
+        b.* = current_pixel;
     }
 
-    if (reader.pos < reader.data.len) {
+    // Ignore last 8 bytes marking the end
+    if (reader.seek + 8 < reader.end) {
         return DecodeError.LeftoverData;
     }
 }
@@ -493,12 +476,11 @@ fn readFileAlloc(allocator: Allocator, path: []const u8) ![]const u8 {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const buf = try allocator.alloc(u8, try file.getEndPos());
-    var file_fs_reader = file.reader(buf);
+    var buf: [4096]u8 = undefined;
+    var file_fs_reader = file.reader(&buf);
     const file_reader = &file_fs_reader.interface;
 
-    _ = try file_reader.take(buf.len);
-    return buf;
+    return try file_reader.allocRemaining(allocator, .unlimited);
 }
 
 test {

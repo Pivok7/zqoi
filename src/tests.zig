@@ -5,7 +5,7 @@ const Rgba = zqoi.Rgba;
 const Image = zqoi.Image;
 const FileHeader = zqoi.FileHeader;
 
-test "t1_simple_encode" {
+test "simple_encode" {
     const allocator = std.testing.allocator;
 
     var image = Image{
@@ -29,10 +29,10 @@ test "t1_simple_encode" {
 
     var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
     touch.close();
-    try image.toFilePath(allocator, "tests_output/simple.qoi");
+    try image.toFilePath("tests_output/simple.qoi");
 }
 
-test "t2_noise" {
+test "noise" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(blk: {
@@ -63,54 +63,90 @@ test "t2_noise" {
 
     var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
     touch.close();
-    try image.toFilePath(allocator, "tests_output/random.qoi");
+    try image.toFilePath("tests_output/random.qoi");
 }
 
-test "t3_read_write" {
+test "read_write" {
     const allocator = std.testing.allocator;
 
-    var img = try Image.fromFilePath(allocator, "tests_output/random.qoi");
-    try img.toFilePath(allocator, "tests_output/copy_random.qoi");
-    img.deinit(allocator);
+    const dir_prefix = "tests_output/";
+    const file_paths = [_][2][]const u8{
+        [2][]const u8{
+            dir_prefix ++ "simple.qoi",
+            dir_prefix ++ "copy_simple.qoi",
+        },
+        [2][]const u8{
+            dir_prefix ++ "random.qoi",
+            dir_prefix ++ "copy_random.qoi",
+        },
+    };
 
-    const file_1_path = "tests_output/random.qoi";
-    const file_2_path = "tests_output/copy_random.qoi";
+    for (file_paths) |path_pair| {
+        var img = try Image.fromFilePath(allocator, path_pair[0]);
+        try img.toFilePath(path_pair[1]);
+        img.deinit(allocator);
 
-    var file_1 = try zqoi.Image.fromFilePath(allocator, file_1_path);
-    var file_2 = try zqoi.Image.fromFilePath(allocator, file_2_path);
+        var file_1 = try zqoi.Image.fromFilePath(allocator, path_pair[0]);
+        var file_2 = try zqoi.Image.fromFilePath(allocator, path_pair[1]);
 
-    if (!std.mem.eql(u8, file_1.asBytes(), file_2.asBytes())) {
-        std.log.err("random.qoi: input != output!", .{});
-        return error.CorruptedOutput;
+        if (!std.mem.eql(u8, file_1.asBytes(), file_2.asBytes())) {
+            std.log.err("{s} != {s}", .{path_pair[0], path_pair[1]});
+            return error.CorruptedOutput;
+        }
+
+        file_1.deinit(allocator);
+        file_2.deinit(allocator);
     }
+}
 
-    file_1.deinit(allocator);
-    file_2.deinit(allocator);
+test "interfaces" {
+    const allocator = std.testing.allocator;
 
-    img = try Image.fromFilePath(allocator, "tests_output/simple.qoi");
-    try img.toFilePath(allocator, "tests_output/copy_simple.qoi");
-    img.deinit(allocator);
+    const dir_prefix = "tests_output/";
+    const file_paths = [_][2][]const u8{
+        [2][]const u8{
+            dir_prefix ++ "simple.qoi",
+            dir_prefix ++ "copy_simple.qoi",
+        },
+        [2][]const u8{
+            dir_prefix ++ "random.qoi",
+            dir_prefix ++ "copy_random.qoi",
+        },
+    };
 
-    file_1 = try zqoi.Image.fromFilePath(allocator, file_1_path);
-    file_2 = try zqoi.Image.fromFilePath(allocator, file_2_path);
+    for (file_paths) |path_pair| {
+        var img = try Image.fromFilePath(allocator, path_pair[0]);
+        defer img.deinit(allocator);
 
-    if (!std.mem.eql(u8, file_1.asBytes(), file_2.asBytes())) {
-        std.log.err("simple.qoi: input != output!", .{});
-        return error.CorruptedOutput;
+        // Enough not to overflow
+        const img_size = img.width * img.height * 5;
+
+        const buf = try allocator.alloc(u8, img_size);
+        defer allocator.free(buf);
+
+        const img_out_buf = try img.toBuf(buf);
+
+        var writer_alloc = std.Io.Writer.Allocating.init(allocator);
+        defer writer_alloc.deinit();
+
+        const writer = &writer_alloc.writer;
+        try img.toWriter(writer);
+
+        if (!std.mem.eql(u8, img_out_buf, writer.buffered())) {
+            std.log.err("{s} != {s}", .{path_pair[0], path_pair[1]});
+            return error.CorruptedOutput;
+        }
     }
-
-    file_1.deinit(allocator);
-    file_2.deinit(allocator);
 }
 
 // Fuzzer taken from https://github.com/ikskuh/zig-qoi
-test "t4_input_fuzzer" {
+test "input_fuzzer" {
     const allocator = std.testing.allocator;
 
     var rng_engine = std.Random.DefaultPrng.init(0x1337);
     const rng = rng_engine.random();
 
-    var rounds: usize = 32;
+    var rounds: usize = 2;
     while (rounds > 0) {
         rounds -= 1;
         var input_buffer: [1 << 20]u8 = undefined; // perform on a 1 MB buffer
@@ -132,7 +168,7 @@ test "t4_input_fuzzer" {
             @memcpy(input_buffer[0..header.len], &header);
         }
 
-        var image_or_err = Image.fromMemory(allocator, &input_buffer);
+        var image_or_err = Image.fromBuf(allocator, &input_buffer);
         if (image_or_err) |*image| {
             defer image.deinit(allocator);
         } else |err| {

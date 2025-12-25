@@ -51,7 +51,7 @@ fn testDecode(
         //START
         const start_time = std.time.nanoTimestamp();
 
-        const image = try zqoi.Image.fromMemory(allocator, pixels);
+        const image = try zqoi.Image.fromBuf(allocator, pixels);
 
         const end_time = std.time.nanoTimestamp();
         //END
@@ -83,7 +83,7 @@ fn testEncode(
         //START
         const start_time = std.time.nanoTimestamp();
 
-        try image.toMemory(&writer);
+        try image.toWriter(&writer);
 
         const end_time = std.time.nanoTimestamp();
         //END
@@ -183,7 +183,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = if (debug_mode) gpa.allocator()
-        else std.heap.smp_allocator;
+        else std.heap.raw_c_allocator;
 
     zstbi.init(allocator);
     errdefer zstbi.deinit();
@@ -194,7 +194,6 @@ pub fn main() !void {
     stdout = &stdout_writer.interface;
 
     const args = try std.process.argsAlloc(allocator);
-    errdefer std.process.argsFree(allocator, args);
     defer std.process.argsFree(allocator, args);
 
     if (args.len <= 1) {
