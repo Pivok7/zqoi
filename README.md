@@ -73,8 +73,8 @@ You can run benchmarks yourself by following the instructions in the 'benchmark'
 
 Benchmarks performed on the images from https://qoiformat.org/benchmark/
 
-
 CPU: AMD Ryzen 7 5700X
+
 Allocator used for zqoi: raw_c_allocator
 
 Here the results:
