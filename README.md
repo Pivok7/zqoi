@@ -77,7 +77,7 @@ CPU: AMD Ryzen 7 5700X
 
 Allocator used for zqoi: raw_c_allocator
 
-Here the results:
+Here are the results:
 
 |Benchmark      |zqoi   |reference  |
 |-              |-      |-          |
