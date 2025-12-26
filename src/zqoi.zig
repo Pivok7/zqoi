@@ -63,15 +63,15 @@ pub const ImageFormat = enum(u8) {
         };
     }
 
-    pub fn toChannels(self: *const @This()) u8 {
-        switch (self.*) {
+    pub fn toChannels(self: @This()) u8 {
+        switch (self) {
             .r8g8b8_linear, .r8g8b8_srgb => return 3,
             .r8g8b8a8_linear, .r8g8b8a8_srgb => return 4,
         }
     }
 
-    pub fn toColorspace(self: *const @This()) Colorspace {
-        switch (self.*) {
+    pub fn toColorspace(self: @This()) Colorspace {
+        switch (self) {
             .r8g8b8_srgb, .r8g8b8a8_srgb => return .srgb,
             .r8g8b8_linear, .r8g8b8a8_linear => return .linear,
         }
@@ -110,7 +110,15 @@ pub const Image = struct {
     }
 
     pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
-        const file_data = try readFileAlloc(allocator, path);
+        var file = try std.fs.cwd().openFile(path, .{});
+        errdefer file.close();
+        defer file.close();
+
+        var buf: [4096]u8 = undefined;
+        var file_fs_reader = file.reader(&buf);
+        const file_reader = &file_fs_reader.interface;
+
+        const file_data = try file_reader.allocRemaining(allocator, .unlimited);
         defer allocator.free(file_data);
 
         return try fromBuffer(allocator, file_data);
@@ -504,17 +512,6 @@ pub fn decodeData(
     if (reader.pos + 8 < reader.data.len) {
         return DecodeError.LeftoverData;
     }
-}
-
-fn readFileAlloc(allocator: Allocator, path: []const u8) ![]const u8 {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    var buf: [4096]u8 = undefined;
-    var file_fs_reader = file.reader(&buf);
-    const file_reader = &file_fs_reader.interface;
-
-    return try file_reader.allocRemaining(allocator, .unlimited);
 }
 
 test {
