@@ -138,8 +138,15 @@ fn benchmarkDir(
     var total_time: EncDecTime = .{ .encode = 0, .decode = 0 };
     var total_images: usize = 0;
     var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch {
+        const time = try benchFile(allocator, path, options);
+
+        if (options.print_individual) {
+            try stdout.print("{s}\n", .{path});
+            try printEncDec(time.encode, time.decode);
+            try stdout.flush();
+        }
         return .{
-            .time = try benchFile(allocator, path, options),
+            .time = time,
             .timages = 0,
         };
     };
@@ -161,12 +168,6 @@ fn benchmarkDir(
         total_time.encode += res.time.encode;
         total_time.decode += res.time.decode;
         total_images += res.timages;
-
-        if (options.print_individual) {
-            try stdout.print("{s}\n", .{new_path});
-            try printEncDec(res.time.encode, res.time.decode);
-            try stdout.flush();
-        }
     }
 
     try stdout.print("{s}\n", .{path});
