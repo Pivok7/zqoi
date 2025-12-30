@@ -187,7 +187,6 @@ pub fn main() !void {
         else std.heap.raw_c_allocator;
 
     zstbi.init(allocator);
-    errdefer zstbi.deinit();
     defer zstbi.deinit();
 
     var stdout_buf: [4096]u8 = undefined;
