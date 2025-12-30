@@ -213,7 +213,7 @@ const FastReader = struct {
     data: []const u8,
     pos: usize = 0,
 
-    pub inline fn readUnsafe(self: *@This()) u8 {
+    pub fn readUnsafe(self: *@This()) u8 {
         self.pos += 1;
         return self.data[self.pos - 1];
     }
@@ -228,18 +228,18 @@ const FastReader = struct {
     }
 };
 
-inline fn pixelCmp(a: Rgba, b: Rgba) bool {
+fn pixelCmp(a: Rgba, b: Rgba) bool {
     return @as(u32, @bitCast(a)) == @as(u32, @bitCast(b));
 }
 
-inline fn pixelHash(pixel: Rgba) u8 {
+fn pixelHash(pixel: Rgba) u8 {
     const vp: @Vector(4, u8) = @bitCast(pixel);
     const weights = @Vector(4, u8){ 3, 5, 7, 11 };
     const sum = @reduce(.Add, vp *% weights);
     return @truncate(sum & 63);
 }
 
-inline fn checkLuma(diff: Rgba) bool {
+fn checkLuma(diff: Rgba) bool {
     return (
         ((diff.g +% 32) < 64) and
         ((diff.r -% diff.g +% 8) < 16) and
@@ -247,7 +247,7 @@ inline fn checkLuma(diff: Rgba) bool {
     );
 }
 
-inline fn checkDiff(diff: Rgba) bool {
+fn checkDiff(diff: Rgba) bool {
     return (
         ((diff.r +% 2) < 4) and
         ((diff.g +% 2) < 4) and
@@ -255,7 +255,7 @@ inline fn checkDiff(diff: Rgba) bool {
     );
 }
 
-inline fn colorDiff(a: Rgba, b: Rgba) Rgba {
+fn colorDiff(a: Rgba, b: Rgba) Rgba {
     return .{
         .r = b.r -% a.r,
         .g = b.g -% a.g,
