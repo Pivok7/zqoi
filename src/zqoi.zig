@@ -236,7 +236,7 @@ fn pixelHash(pixel: Rgba) u8 {
     const vp: @Vector(4, u8) = @bitCast(pixel);
     const weights = @Vector(4, u8){ 3, 5, 7, 11 };
     const sum = @reduce(.Add, vp *% weights);
-    return @truncate(sum & 63);
+    return sum & 63;
 }
 
 fn checkLuma(diff: Rgba) bool {
