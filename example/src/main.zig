@@ -8,7 +8,7 @@ pub fn main() !void {
 
     // Load and save file
     {
-        var img = try zqoi.Image.fromFilePath(allocator, "image.qoi");
+        var img = try zqoi.Image.fromFilePath(allocator, "../image.qoi");
         defer img.deinit(allocator);
 
         try img.toFilePath("copy.qoi");

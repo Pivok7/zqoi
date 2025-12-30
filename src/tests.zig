@@ -5,6 +5,13 @@ const Rgba = zqoi.Rgba;
 const Image = zqoi.Image;
 const FileHeader = zqoi.FileHeader;
 
+const test_output = "test_output/";
+
+fn touch_output() !void {
+    var touch = try std.fs.cwd().makeOpenPath(test_output, .{});
+    touch.close();
+}
+
 test "simple_encode" {
     const allocator = std.testing.allocator;
 
@@ -27,9 +34,8 @@ test "simple_encode" {
         };
     }
 
-    var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
-    touch.close();
-    try image.toFilePath("tests_output/simple.qoi");
+    try touch_output();
+    try image.toFilePath(test_output ++ "simple.qoi");
 }
 
 test "noise" {
@@ -61,25 +67,42 @@ test "noise" {
         };
     }
 
-    var touch = try std.fs.cwd().makeOpenPath("tests_output", .{});
-    touch.close();
-    try image.toFilePath("tests_output/random.qoi");
+    try touch_output();
+    try image.toFilePath(test_output ++ "random.qoi");
+}
+
+test "image" {
+    const allocator = std.testing.allocator;
+
+    const image = try zqoi.Image.fromFilePath(allocator, "image.qoi");
+    defer image.deinit(allocator);
+
+    try image.toFilePath(test_output ++ "image_copy.qoi");
+
+    const image_copy = try zqoi.Image.fromFilePath(allocator, test_output ++ "image_copy.qoi");
+    defer image_copy.deinit(allocator);
+
+    if (!std.mem.eql(u8, image.asBytes(), image_copy.asBytes())) {
+        std.log.err("{s} != {s}", .{"image.qoi", "image_copy.qoi"});
+        return error.CorruptedOutput;
+    }
 }
 
 test "read_write" {
     const allocator = std.testing.allocator;
 
-    const dir_prefix = "tests_output/";
     const file_paths = [_][2][]const u8{
         [2][]const u8{
-            dir_prefix ++ "simple.qoi",
-            dir_prefix ++ "copy_simple.qoi",
+            test_output ++ "simple.qoi",
+            test_output ++ "simple_copy.qoi",
         },
         [2][]const u8{
-            dir_prefix ++ "random.qoi",
-            dir_prefix ++ "copy_random.qoi",
+            test_output ++ "random.qoi",
+            test_output ++ "random_copy.qoi",
         },
     };
+
+    try touch_output();
 
     for (file_paths) |path_pair| {
         var img = try Image.fromFilePath(allocator, path_pair[0]);
@@ -102,17 +125,18 @@ test "read_write" {
 test "interfaces" {
     const allocator = std.testing.allocator;
 
-    const dir_prefix = "tests_output/";
     const file_paths = [_][2][]const u8{
         [2][]const u8{
-            dir_prefix ++ "simple.qoi",
-            dir_prefix ++ "copy_simple.qoi",
+            test_output ++ "simple.qoi",
+            test_output ++ "simple_copy.qoi",
         },
         [2][]const u8{
-            dir_prefix ++ "random.qoi",
-            dir_prefix ++ "copy_random.qoi",
+            test_output ++ "random.qoi",
+            test_output ++ "random_copy.qoi",
         },
     };
+
+    try touch_output();
 
     for (file_paths) |path_pair| {
         var img = try Image.fromFilePath(allocator, path_pair[0]);
