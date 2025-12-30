@@ -74,7 +74,11 @@ test "noise" {
 test "image" {
     const allocator = std.testing.allocator;
 
-    const image = try zqoi.Image.fromFilePath(allocator, "image.qoi");
+    const image = zqoi.Image.fromFilePath(allocator, "image.qoi") catch {
+        std.log.err("File image.qoi not found!", .{});
+        std.debug.print("Please run tests from root dir\n", .{});
+        return error.FileNotFound;
+    };
     defer image.deinit(allocator);
 
     try image.toFilePath(test_output ++ "image_copy.qoi");
