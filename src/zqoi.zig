@@ -111,7 +111,6 @@ pub const Image = struct {
 
     pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
         var file = try std.fs.cwd().openFile(path, .{});
-        errdefer file.close();
         defer file.close();
 
         var buf: [4096]u8 = undefined;
