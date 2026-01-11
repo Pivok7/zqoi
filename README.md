@@ -77,8 +77,38 @@ CPU: AMD Ryzen 7 5700X
 
 Allocator used for zqoi: raw_c_allocator
 
-Here are the results:
+The results:
 
-|Benchmark      |zqoi   |reference  |
-|-              |-      |-          |
-|WIP            |WIP    |WIP        |
+|Encoding           |zqoi    |reference  |
+|-------------------|--------|-----------|
+|textures_plants    |3.60ms  |4.2ms      |
+|screenshot_game    |2.54ms  |2.6ms      |
+|textures_pk02      |1.82ms  |1.8ms      |
+|photo_kodak        |2.59ms  |2.6ms      |
+|textures_pk01      |0.66ms  |0.7ms      |
+|icon_512           |0.49ms  |0.7ms      |
+|photo_tecnick      |10.02ms |10.0ms     |
+|icon_64            |0.01ms  |0.0ms      |
+|textures_photo     |6.45ms  |6.1ms      |
+|textures_pk        |0.33ms  |0.3ms      |
+|screenshot_web     |15.27ms |23.0ms     |
+|photo_wikipedia    |7.71ms  |7.6ms      |
+|pngimg             |6.18ms  |7.4ms      |
+|total              |1.99ms  |2.1ms      |
+
+|Decoding           |zqoi    |reference  |
+|-------------------|--------|-----------|
+|textures_plants    |2.07ms  |2.7ms      |
+|screenshot_game    |1.69ms  |2.1ms      |
+|textures_pk02      |1.23ms  |1.4ms      |
+|photo_kodak        |1.58ms  |2.0ms      |
+|textures_pk01      |0.41ms  |0.5ms      |
+|icon_512           |0.31ms  |0.4ms      |
+|photo_tecnick      |6.14ms  |7.6ms      |
+|icon_64            |0.01ms  |0.0ms      |
+|textures_photo     |3.97ms  |5.1ms      |
+|textures_pk        |0.18ms  |0.2ms      |
+|screenshot_web     |8.88ms  |20.4ms     |
+|photo_wikipedia    |4.62ms  |5.8ms      |
+|pngimg             |3.63ms  |5.8ms      |
+|total              |1.24ms  |1.7ms      |
