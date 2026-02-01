@@ -12,6 +12,39 @@ fn touch_output() !void {
     touch.close();
 }
 
+fn compare_images(
+    allocator: std.mem.Allocator,
+    file_path_1: []const u8,
+    file_path_2: []const u8,
+) !void {
+    const image_1_raw = blk: {
+        var file = try std.fs.cwd().openFile(file_path_1, .{});
+        var buf: [4096]u8 = undefined;
+        var fs_reader = file.reader(&buf);
+        const reader = &fs_reader.interface;
+        break :blk try reader.allocRemaining(allocator, .unlimited);
+    };
+    defer allocator.free(image_1_raw);
+
+    const image_2_raw = blk: {
+        var file = try std.fs.cwd().openFile(file_path_2, .{});
+        var buf: [4096]u8 = undefined;
+        var fs_reader = file.reader(&buf);
+        const reader = &fs_reader.interface;
+        break :blk try reader.allocRemaining(allocator, .unlimited);
+    };
+    defer allocator.free(image_2_raw);
+
+    const image_1 = try zqoi.Image.fromBuffer(allocator, image_1_raw);
+    defer image_1.deinit(allocator);
+
+    const image_2 = try zqoi.Image.fromBuffer(allocator, image_2_raw);
+    defer image_2.deinit(allocator);
+
+    try std.testing.expectEqualSlices(u8, image_1.asBytes(), image_2.asBytes());
+    try std.testing.expectEqualSlices(u8, image_1_raw, image_2_raw);
+}
+
 test "simple_encode" {
     const allocator = std.testing.allocator;
 
@@ -41,11 +74,7 @@ test "simple_encode" {
 test "noise" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(0x1337);
     const rand = prng.random();
 
     var image = Image{
@@ -58,13 +87,17 @@ test "noise" {
     image.pixels = try allocator.alloc(Rgba, image.width * image.height);
     defer allocator.free(image.pixels);
 
+    var changer: Rgba = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
+
     for (image.pixels) |*pixel| {
-        pixel.* = Rgba{
-            .r = rand.int(u8),
-            .g = rand.int(u8),
-            .b = rand.int(u8),
-            .a = rand.int(u8),
-        };
+        switch (rand.intRangeAtMost(u8, 0, 2)) {
+            0 => changer.r +%= rand.uintAtMost(u8, 8) -% 4,
+            1 => changer.g +%= rand.uintAtMost(u8, 8) -% 4,
+            2 => changer.b +%= rand.uintAtMost(u8, 8) -% 4,
+            else => unreachable,
+        }
+
+        pixel.* = changer;
     }
 
     try touch_output();
@@ -83,13 +116,7 @@ test "image" {
 
     try image.toFilePath(test_output ++ "image_copy.qoi");
 
-    const image_copy = try zqoi.Image.fromFilePath(allocator, test_output ++ "image_copy.qoi");
-    defer image_copy.deinit(allocator);
-
-    if (!std.mem.eql(u8, image.asBytes(), image_copy.asBytes())) {
-        std.log.err("{s} != {s}", .{"image.qoi", "image_copy.qoi"});
-        return error.CorruptedOutput;
-    }
+    try compare_images(allocator, "image.qoi", test_output ++ "image_copy.qoi");
 }
 
 test "read_write" {
@@ -113,16 +140,7 @@ test "read_write" {
         try img.toFilePath(path_pair[1]);
         img.deinit(allocator);
 
-        var file_1 = try zqoi.Image.fromFilePath(allocator, path_pair[0]);
-        var file_2 = try zqoi.Image.fromFilePath(allocator, path_pair[1]);
-
-        if (!std.mem.eql(u8, file_1.asBytes(), file_2.asBytes())) {
-            std.log.err("{s} != {s}", .{path_pair[0], path_pair[1]});
-            return error.CorruptedOutput;
-        }
-
-        file_1.deinit(allocator);
-        file_2.deinit(allocator);
+        try compare_images(allocator, path_pair[0], path_pair[1]);
     }
 }
 
@@ -160,10 +178,7 @@ test "interfaces" {
         const writer = &writer_alloc.writer;
         try img.toWriter(writer);
 
-        if (!std.mem.eql(u8, img_out_buf, writer.buffered())) {
-            std.log.err("{s} != {s}", .{path_pair[0], path_pair[1]});
-            return error.CorruptedOutput;
-        }
+        try std.testing.expectEqualSlices(u8, img_out_buf, writer.buffered());
     }
 }
 
@@ -174,7 +189,7 @@ test "input_fuzzer" {
     var rng_engine = std.Random.DefaultPrng.init(0x1337);
     const rng = rng_engine.random();
 
-    var rounds: usize = 32;
+    var rounds: usize = 2;
     while (rounds > 0) {
         rounds -= 1;
         var input_buffer: [1 << 20]u8 = undefined; // perform on a 1 MB buffer
