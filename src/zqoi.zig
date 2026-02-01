@@ -100,7 +100,7 @@ pub const Image = struct {
         image.pixels = try allocator.alloc(Rgba, header.width * header.height);
         errdefer allocator.free(image.pixels);
 
-        try decodeData(header, image.pixels, data[14..]);
+        try decodeData(image.pixels, data[14..]);
         return image;
     }
 
@@ -211,6 +211,18 @@ pub const FileHeader = struct {
 const FastReader = struct {
     data: []const u8,
     pos: usize = 0,
+
+    pub const readMode = enum {
+        safe,
+        unsafe,
+    };
+
+    pub fn read(self: *@This(), comptime read_mode: readMode) DecodeError!u8 {
+        return switch (read_mode) {
+            .safe => try self.readSafe(),
+            .unsafe => self.readUnsafe(),
+        };
+    }
 
     pub fn readUnsafe(self: *@This()) u8 {
         self.pos += 1;
@@ -392,8 +404,59 @@ pub fn decodeHeader(data: []const u8) DecodeError!FileHeader {
     };
 }
 
+inline fn decodeRead(
+    comptime read_mode: FastReader.readMode,
+    reader: *FastReader,
+    lookup_array: *[64]Rgba,
+    current_pixel: *Rgba,
+    current_run: *u8,
+) DecodeError!void {
+    const mask2: u8 = 0b1100_0000;
+
+    const b1: u8 = try reader.read(read_mode);
+
+    // QOI_OP_RGB
+    if (b1 == QoiOp.Rgb) {
+        current_pixel.r = try reader.read(read_mode);
+        current_pixel.g = try reader.read(read_mode);
+        current_pixel.b = try reader.read(read_mode);
+    }
+    // QOI_OP_RGBA
+    else if (b1 == QoiOp.Rgba) {
+        current_pixel.r = try reader.read(read_mode);
+        current_pixel.g = try reader.read(read_mode);
+        current_pixel.b = try reader.read(read_mode);
+        current_pixel.a = try reader.read(read_mode);
+    }
+    // QOI_OP_INDEX
+    else if ((b1 & mask2) == QoiOp.Index) {
+        @branchHint(.likely);
+        current_pixel.* = lookup_array[b1];
+    }
+    // QOI_OP_DIFF
+    else if ((b1 & mask2) == QoiOp.Diff) {
+        current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
+        current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
+        current_pixel.b +%= ( b1       & 0x03) -% 2;
+    }
+    // QOI_OP_LUMA
+    else if ((b1 & mask2) == QoiOp.Luma) {
+        @branchHint(.likely);
+        const b2: u8 = try reader.read(read_mode);
+        const vg: u8 = (b1 & 0x3f) -% 32;
+        current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
+        current_pixel.g +%= vg;
+        current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
+    }
+    // QOI_OP_RUN
+    else if ((b1 & mask2) == QoiOp.Run) {
+        current_run.* = (b1 & 0x3f);
+    }
+
+    lookup_array[pixelHash(current_pixel.*)] = current_pixel.*;
+}
+
 pub fn decodeData(
-    header: FileHeader,
     buf: []Rgba,
     data: []const u8,
 ) DecodeError!void {
@@ -402,15 +465,11 @@ pub fn decodeData(
         .data = data,
     };
 
-    const channel_mask: u8 = if (header.channels == 3) 0xff else 0x00;
-
     var lookup_array: [64]Rgba = undefined;
     @memset(&lookup_array, Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
     var current_pixel = Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 };
     var current_run: u8 = 0;
-
-    const mask2: u8 = 0b1100_0000;
 
     for (buf) |*b| {
         if (current_run > 0) {
@@ -419,89 +478,23 @@ pub fn decodeData(
         // We only check array bounds if we are close to the array length
         // Unsafe version
         else if (reader.pos < reader.data.len - 4) {
-            const b1: u8 = reader.readUnsafe();
-
-            // QOI_OP_RGB
-            if (b1 == QoiOp.Rgb) {
-                current_pixel.r = reader.readUnsafe();
-                current_pixel.g = reader.readUnsafe();
-                current_pixel.b = reader.readUnsafe();
-            }
-            // QOI_OP_RGBA
-            else if (b1 == QoiOp.Rgba) {
-                current_pixel.r = reader.readUnsafe();
-                current_pixel.g = reader.readUnsafe();
-                current_pixel.b = reader.readUnsafe();
-                current_pixel.a = reader.readUnsafe() | channel_mask;
-            }
-            // QOI_OP_INDEX
-            else if ((b1 & mask2) == QoiOp.Index) {
-                @branchHint(.likely);
-                current_pixel = lookup_array[b1];
-            }
-            // QOI_OP_DIFF
-            else if ((b1 & mask2) == QoiOp.Diff) {
-                current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
-                current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
-                current_pixel.b +%= ( b1       & 0x03) -% 2;
-            }
-            // QOI_OP_LUMA
-            else if ((b1 & mask2) == QoiOp.Luma) {
-                @branchHint(.likely);
-                const b2: u8 = reader.readUnsafe();
-                const vg: u8 = (b1 & 0x3f) -% 32;
-                current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
-                current_pixel.g +%= vg;
-                current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
-            }
-            // QOI_OP_RUN
-            else if ((b1 & mask2) == QoiOp.Run) {
-                current_run = (b1 & 0x3f);
-            }
-
-            lookup_array[pixelHash(current_pixel)] = current_pixel;
+            try decodeRead(
+                .unsafe,
+                &reader,
+                &lookup_array,
+                &current_pixel,
+                &current_run,
+            );
         // Safe version
         } else {
             @branchHint(.cold);
-            const b1: u8 = try reader.readSafe();
-
-            // QOI_OP_RGB
-            if (b1 == QoiOp.Rgb) {
-                current_pixel.r = try reader.readSafe();
-                current_pixel.g = try reader.readSafe();
-                current_pixel.b = try reader.readSafe();
-            }
-            // QOI_OP_RGBA
-            else if (b1 == QoiOp.Rgba) {
-                current_pixel.r = try reader.readSafe();
-                current_pixel.g = try reader.readSafe();
-                current_pixel.b = try reader.readSafe();
-                current_pixel.a = try reader.readSafe() | channel_mask;
-            }
-            // QOI_OP_INDEX
-            else if ((b1 & mask2) == QoiOp.Index) {
-                current_pixel = lookup_array[b1];
-            }
-            // QOI_OP_DIFF
-            else if ((b1 & mask2) == QoiOp.Diff) {
-                current_pixel.r +%= ((b1 >> 4) & 0x03) -% 2;
-                current_pixel.g +%= ((b1 >> 2) & 0x03) -% 2;
-                current_pixel.b +%= ( b1       & 0x03) -% 2;
-            }
-            // QOI_OP_LUMA
-            else if ((b1 & mask2) == QoiOp.Luma) {
-                const b2: u8 = try reader.readSafe();
-                const vg: u8 = (b1 & 0x3f) -% 32;
-                current_pixel.r +%= vg -% 8 +% ((b2 >> 4) & 0x0f);
-                current_pixel.g +%= vg;
-                current_pixel.b +%= vg -% 8 +%  (b2       & 0x0f);
-            }
-            // QOI_OP_RUN
-            else if ((b1 & mask2) == QoiOp.Run) {
-                current_run = (b1 & 0x3f);
-            }
-
-            lookup_array[pixelHash(current_pixel)] = current_pixel;
+            try decodeRead(
+                .safe,
+                &reader,
+                &lookup_array,
+                &current_pixel,
+                &current_run,
+            );
         }
 
         b.* = current_pixel;
