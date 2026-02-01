@@ -505,7 +505,3 @@ pub fn decodeData(
         return DecodeError.LeftoverData;
     }
 }
-
-test {
-    _ = @import("tests.zig");
-}

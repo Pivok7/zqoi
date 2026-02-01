@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib_mod = b.addModule("zqoi", .{
+    _ = b.addModule("zqoi", .{
         .root_source_file = b.path("src/zqoi.zig"),
         .target = target,
         .optimize = optimize,
@@ -12,7 +12,11 @@ pub fn build(b: *std.Build) void {
 
     // Test step
     const lib_unit_tests = b.addTest(.{
-        .root_module = lib_mod,
+        .root_module = b.addModule("test", .{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
