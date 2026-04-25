@@ -133,15 +133,6 @@ pub const Image = struct {
     ) (EncodeError || std.Io.Writer.Error)![]u8 {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
 
-        const header = FileHeader{
-            .width = self.width,
-            .height = self.height,
-            .channels = self.format.toChannels(),
-            .colorspace = self.format.toColorspace(),
-        };
-
-        if (!header.isValid()) return EncodeError.CorruptedHeader;
-
         var writer = std.Io.Writer.fixed(buf);
         try self.toWriter(&writer);
 
@@ -160,6 +151,8 @@ pub const Image = struct {
             .channels = self.format.toChannels(),
             .colorspace = self.format.toColorspace(),
         };
+
+        if (!header.isValid()) return EncodeError.CorruptedHeader;
 
         try encodeHeader(writer, &header);
         try encodeData(writer, self.pixels);
