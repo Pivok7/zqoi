@@ -1,3 +1,4 @@
-zig-out
+/.zig-cache
+/zig-out
 copy.qoi
 generated.qoi

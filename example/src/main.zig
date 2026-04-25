@@ -1,17 +1,16 @@
 const std = @import("std");
 const zqoi = @import("zqoi");
 
-pub fn main() !void {
-    var dba = std.heap.DebugAllocator(.{}){};
-    defer _ = dba.deinit();
-    const allocator = dba.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Load and save file
     {
-        var img = try zqoi.Image.fromFilePath(allocator, "../image.qoi");
+        var img = try zqoi.Image.fromFilePath(allocator, io, "../image.qoi");
         defer img.deinit(allocator);
 
-        try img.toFilePath("copy.qoi");
+        try img.toFilePath(io, "copy.qoi");
     }
 
     // Manually create image
@@ -35,6 +34,6 @@ pub fn main() !void {
             };
         }
 
-        try img.toFilePath("generated.qoi");
+        try img.toFilePath(io, "generated.qoi");
     }
 }

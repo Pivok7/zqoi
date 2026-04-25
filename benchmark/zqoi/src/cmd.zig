@@ -21,7 +21,7 @@ pub fn printHelp() void {
     std.debug.print("    zqoi-bench benchmark-dir/pngimg --runs 5 --warmup 0\n", .{});
 }
 
-pub fn porcessArgs(args: [][:0]u8) !BenchmarkOptions {
+pub fn porcessArgs(args: []const [:0]const u8) !BenchmarkOptions {
     var options: BenchmarkOptions = .{};
     var cmd_state: CmdArgsState = .none;
 

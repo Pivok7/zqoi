@@ -1,5 +1,8 @@
 const std = @import("std");
 const zqoi = @import("zqoi.zig");
+const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const cwd = Io.Dir.cwd;
 
 const Rgba = zqoi.Rgba;
 const Image = zqoi.Image;
@@ -7,29 +10,25 @@ const FileHeader = zqoi.FileHeader;
 
 const test_output = "test_output/";
 
-fn touch_output() !void {
-    var touch = try std.fs.cwd().makeOpenPath(test_output, .{});
-    touch.close();
-}
-
 fn compare_images(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
+    io: Io,
     file_path_1: []const u8,
     file_path_2: []const u8,
 ) !void {
     const image_1_raw = blk: {
-        var file = try std.fs.cwd().openFile(file_path_1, .{});
+        var file = try cwd().openFile(io, file_path_1, .{});
         var buf: [4096]u8 = undefined;
-        var fs_reader = file.reader(&buf);
+        var fs_reader = file.reader(io, &buf);
         const reader = &fs_reader.interface;
         break :blk try reader.allocRemaining(allocator, .unlimited);
     };
     defer allocator.free(image_1_raw);
 
     const image_2_raw = blk: {
-        var file = try std.fs.cwd().openFile(file_path_2, .{});
+        var file = try cwd().openFile(io, file_path_2, .{});
         var buf: [4096]u8 = undefined;
-        var fs_reader = file.reader(&buf);
+        var fs_reader = file.reader(io, &buf);
         const reader = &fs_reader.interface;
         break :blk try reader.allocRemaining(allocator, .unlimited);
     };
@@ -47,6 +46,7 @@ fn compare_images(
 
 test "simple_encode" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var image = Image{
         .width = 1024,
@@ -67,12 +67,13 @@ test "simple_encode" {
         };
     }
 
-    try touch_output();
-    try image.toFilePath(test_output ++ "simple.qoi");
+    try cwd().createDirPath(io, test_output);
+    try image.toFilePath(io, test_output ++ "simple.qoi");
 }
 
 test "noise" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var prng = std.Random.DefaultPrng.init(0x1337);
     const rand = prng.random();
@@ -100,27 +101,29 @@ test "noise" {
         pixel.* = changer;
     }
 
-    try touch_output();
-    try image.toFilePath(test_output ++ "random.qoi");
+    try cwd().createDirPath(io, test_output);
+    try image.toFilePath(io, test_output ++ "random.qoi");
 }
 
 test "image" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
-    const image = zqoi.Image.fromFilePath(allocator, "image.qoi") catch {
+    const image = zqoi.Image.fromFilePath(allocator, io, "image.qoi") catch {
         std.log.err("File image.qoi not found!", .{});
         std.debug.print("Please run tests from root dir\n", .{});
         return error.FileNotFound;
     };
     defer image.deinit(allocator);
 
-    try image.toFilePath(test_output ++ "image_copy.qoi");
+    try image.toFilePath(io, test_output ++ "image_copy.qoi");
 
-    try compare_images(allocator, "image.qoi", test_output ++ "image_copy.qoi");
+    try compare_images(allocator, io, "image.qoi", test_output ++ "image_copy.qoi");
 }
 
 test "read_write" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     const file_paths = [_][2][]const u8{
         [2][]const u8{
@@ -133,19 +136,20 @@ test "read_write" {
         },
     };
 
-    try touch_output();
+    try cwd().createDirPath(io, test_output);
 
     for (file_paths) |path_pair| {
-        var img = try Image.fromFilePath(allocator, path_pair[0]);
-        try img.toFilePath(path_pair[1]);
+        var img = try Image.fromFilePath(allocator, io, path_pair[0]);
+        try img.toFilePath(io, path_pair[1]);
         img.deinit(allocator);
 
-        try compare_images(allocator, path_pair[0], path_pair[1]);
+        try compare_images(allocator, io, path_pair[0], path_pair[1]);
     }
 }
 
 test "interfaces" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     const file_paths = [_][2][]const u8{
         [2][]const u8{
@@ -158,10 +162,10 @@ test "interfaces" {
         },
     };
 
-    try touch_output();
+    try cwd().createDirPath(io, test_output);
 
     for (file_paths) |path_pair| {
-        var img = try Image.fromFilePath(allocator, path_pair[0]);
+        var img = try Image.fromFilePath(allocator, io, path_pair[0]);
         defer img.deinit(allocator);
 
         // Enough not to overflow

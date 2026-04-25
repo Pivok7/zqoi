@@ -6,7 +6,7 @@ QOI decoder/encoder written in pure Zig. Optimized for decoding speed.
 
 You will need:
 
-* Zig compiler 0.15.2
+* Zig compiler 0.16.0
 
 Fetch:
 ```bash
@@ -16,11 +16,11 @@ zig fetch --save git+https://github.com/Pivok7/zqoi
 In build.zig:
 
 ```zig
-const zqoi_dep = b.dependency("zqoi", .{
+const zqoi = b.dependency("zqoi", .{
     .target = target,
     .optimize = optimize,
-});
-exe.root_module.addImport("zqoi", zqoi_dep.module("zqoi"));
+}).module("root");
+exe.root_module.addImport("zqoi", zqoi);
 ```
 Example:
 
@@ -28,17 +28,16 @@ Example:
 const std = @import("std");
 const zqoi = @import("zqoi");
 
-pub fn main() !void {
-    var dba = std.heap.DebugAllocator(.{}){};
-    defer _ = dba.deinit();
-    const allocator = dba.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Load and save file
     {
-        var img = try zqoi.Image.fromFilePath(allocator, "image.qoi");
+        var img = try zqoi.Image.fromFilePath(allocator, io, "../image.qoi");
         defer img.deinit(allocator);
 
-        try img.toFilePath("copy.qoi");
+        try img.toFilePath(io, "copy.qoi");
     }
 
     // Manually create image
@@ -62,20 +61,20 @@ pub fn main() !void {
             };
         }
 
-        try img.toFilePath("generated.qoi");
+        try img.toFilePath(io, "generated.qoi");
     }
 }
 ```
 
 ## Speed
 
+## WARNING! Benchmarks won't compile right now!
+
 You can run benchmarks yourself by following the instructions in the 'benchmark' directory.
 
 Benchmarks performed on the images from https://qoiformat.org/benchmark/
 
 CPU: AMD Ryzen 7 5700X
-
-Allocator used for zqoi: raw_c_allocator
 
 The results:
 

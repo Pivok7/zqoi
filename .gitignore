@@ -1,2 +1,3 @@
-.zig-cache
-test_output
+/.zig-cache
+/test_output
+/zig-pkg

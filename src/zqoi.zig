@@ -1,5 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const cwd = Io.Dir.cwd;
+
+const io_buf_size = 4096;
 
 const QoiOp = struct {
     pub const Rgb = 0b1111_1110;
@@ -109,12 +113,12 @@ pub const Image = struct {
         return try fromBuffer(allocator, buf);
     }
 
-    pub fn fromFilePath(allocator: Allocator, path: []const u8) !Self {
-        var file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
+    pub fn fromFilePath(allocator: Allocator, io: Io, path: []const u8) !Self {
+        var file = try cwd().openFile(io, path, .{});
+        defer file.close(io);
 
-        var buf: [4096]u8 = undefined;
-        var file_fs_reader = file.reader(&buf);
+        var buf: [io_buf_size]u8 = undefined;
+        var file_fs_reader = file.reader(io, &buf);
         const file_reader = &file_fs_reader.interface;
 
         const file_data = try file_reader.allocRemaining(allocator, .unlimited);
@@ -164,14 +168,15 @@ pub const Image = struct {
 
     pub fn toFilePath(
         self: *const Self,
+        io: Io,
         file_path: []const u8
     ) !void {
         if (!self.isValidSize()) return EncodeError.InvalidSize;
-        const file = try std.fs.cwd().createFile(file_path, .{});
-        defer file.close();
+        const file = try cwd().createFile(io, file_path, .{});
+        defer file.close(io);
 
-        var buf: [4096]u8 = undefined;
-        var file_fs_writer = file.writer(&buf);
+        var buf: [io_buf_size]u8 = undefined;
+        var file_fs_writer = file.writer(io, &buf);
         const file_writer = &file_fs_writer.interface;
 
         try self.toWriter(file_writer);

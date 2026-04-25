@@ -13,11 +13,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const zqoi_dep = b.dependency("zqoi", .{
+    const zqoi = b.dependency("zqoi", .{
         .target = target,
         .optimize = optimize,
-    });
-    exe.root_module.addImport("zqoi", zqoi_dep.module("zqoi"));
+    }).module("root");
+    exe.root_module.addImport("zqoi", zqoi);
 
     b.installArtifact(exe);
 
