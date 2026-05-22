@@ -20,7 +20,7 @@
       {
         devShells.default = pkgs.mkShell rec {
           buildInputs = with pkgs; [
-            zig
+            zig_0_16
             git
             wget
             gnutar

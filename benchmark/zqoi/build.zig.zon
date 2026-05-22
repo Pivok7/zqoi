@@ -6,8 +6,8 @@
     .dependencies = .{
         .zqoi = .{ .path = "../../" },
         .zstbi = .{
-            .url = "git+https://github.com/zig-gamedev/zstbi#664305dd52640be15cbebd7cd73d1199679933e1",
-            .hash = "zstbi-0.11.0-dev-L0Ea_2yVBwA4uh-tHfgdhZcQaWRoZVYlNGs4Dl_WTeuR",
+            .url = "git+https://github.com/zig-gamedev/zstbi#3813f5f113b26f644cfa01a30155cc76b3526e91",
+            .hash = "zstbi-0.11.0-dev-L0Ea_3GWBwAh7m54XX055vwLKPTPij5hyqyeq92MXPE2",
         },
     },
 
@@ -15,6 +15,5 @@
         "src",
         "build.zig",
         "build.zig.zon",
-        "image.qoi",
     },
 }

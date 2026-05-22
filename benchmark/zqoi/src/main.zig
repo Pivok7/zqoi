@@ -186,7 +186,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    zstbi.init(allocator, io);
+    zstbi.init(io, allocator);
     defer zstbi.deinit();
 
     var stdout_buf: [4096]u8 = undefined;
@@ -195,7 +195,7 @@ pub fn main(init: std.process.Init) !void {
 
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    if (args.len <= 1) {
+    if (args.len <= 1 or std.mem.eql(u8, args[1], "--help")) {
         cmd.printHelp();
         return;
     }
