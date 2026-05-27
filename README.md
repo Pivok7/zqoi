@@ -68,8 +68,6 @@ pub fn main(init: std.process.Init) !void {
 
 ## Speed
 
-## WARNING! Benchmarks won't compile right now!
-
 You can run benchmarks yourself by following the instructions in the 'benchmark' directory.
 
 Benchmarks performed on the images from https://qoiformat.org/benchmark/
