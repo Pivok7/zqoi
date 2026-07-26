@@ -10,7 +10,7 @@ You will need:
 
 Fetch:
 ```bash
-zig fetch --save git+https://github.com/Pivok7/zqoi
+zig fetch --save git+https://codeberg.org/Pivok/zqoi
 ```
 
 In build.zig:
