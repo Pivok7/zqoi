@@ -9,7 +9,7 @@ You will need:
 * Zig compiler 0.16.0
 
 Fetch:
-```bash
+```sh
 zig fetch --save git+https://codeberg.org/Pivok/zqoi
 ```
 
